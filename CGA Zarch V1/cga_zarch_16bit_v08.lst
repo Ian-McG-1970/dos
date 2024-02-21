@@ -1,0 +1,3332 @@
+     1                                  ; nasm cga_line_v7.asm -o cgaline.com -f bin
+     2                                  
+     3                                  
+     4                                  ; list of next line tables - even values = +8192 odd values = -8192 - put into 2 registers - swap registers after each next line
+     5                                  
+     6                                  VIDEO_SEGMENT	equ	0b800h 	; display memory segment for true CGA graphics modes
+     7                                  SW				equ 80 		; screen width
+     8                                  SE				equ	0		; screen even start
+     9                                  SO				equ	8192	; screen odd start
+    10                                  
+    11                                  
+    12                                  INPUT_STATUS_1	equ	03dah	; VGA status register
+    13                                  VSYNC_MASK	equ	08h	; vertical sync bit in status register 1
+    14                                  DE_MASK		equ	01h	; display enable bit in status register 1
+    15                                  
+    16                                  MAP_MASK	equ	2		; SC map mask register
+    17                                  SC_INDEX		equ	3c4h	; SC index register
+    18                                   
+    19                                  TOP_CC		equ	1
+    20                                  BOTTOM_CC	equ	2
+    21                                  LEFT_CC		equ	4
+    22                                  RIGHT_CC		equ	8
+    23                                  BEHIND_CC	equ	16
+    24                                  MIDDLE_X		equ	160
+    25                                  MIDDLE_Y		equ	100
+    26                                  TOP_EDGE	equ	MIDDLE_Y-100
+    27                                  BOTTOM_EDGE	equ	MIDDLE_Y+99
+    28                                  LEFT_EDGE	equ	MIDDLE_X-160
+    29                                  RIGHT_EDGE	equ	MIDDLE_X+159
+    30                                  
+    31                                  KEY_1	EQU	0231h
+    32                                  KEY_2	EQU	0332h
+    33                                  KEY_3	EQU	0433h
+    34                                  KEY_4 	EQU	0534h
+    35                                  KEY_5 	EQU	0635h
+    36                                  KEY_6 	EQU	0736h
+    37                                  KEY_ESC	EQU 27
+    38                                  
+    39                                  CPU 8086
+    40                                  bits 16
+    41                                  org 100h
+    42                                  
+    43                                  section .text
+    44                                  
+    45                                  start:
+    46 00000000 E89301                  	call	BuildScreenTable
+    47 00000003 B80400                  	mov	ax,04h 	; CGA 320 x 200 4 colors
+    48 00000006 CD10                    	int		10h
+    49                                  
+    50                                  ;	mov	ax,0Bh 	; Pallette
+    51                                  ;	mov	bh,1
+    52                                  ;	mov	bl,0
+    53                                  ;	mov	bx,00000h ; pallette 0 high
+    54                                  ;	int	10h 
+    55                                  	
+    56 00000008 B44A                    	mov	ah, 4ah
+    57 0000000A BB0010                  	mov	bx, 1000h
+    58 0000000D CD21                    	int	21h
+    59 0000000F B448                    	mov	ah, 48h
+    60 00000011 BB0010                  	mov	bx, 1000h
+    61 00000014 CD21                    	int	21h
+    62 00000016 A3[D187]                	mov	[BackBufferSeg], ax
+    63                                  
+    64 00000019 31C0                    	xor ax,ax
+    65 0000001B A2[B087]                	mov	[Exit],al
+    66 0000001E A3[AA87]                	mov	[XAngle],ax
+    67 00000021 A3[AC87]                	mov	[YAngle],ax		
+    68 00000024 A3[AE87]                	mov	[ZAngle],ax
+    69                                  	
+    70                                  ;	mov	[Test0],ax
+    71                                  	
+    72                                  MainLoop:
+    73 00000027 E8DB03                  		call	WaitVSync ; Wait for vertical sync so the new start address has a chance to take effect.
+    74 0000002A E8E603                  		call	CopyClearBackBuffer ; copy back to front
+    75                                  	
+    76 0000002D 8B1E[D187]              		mov		bx,[BackBufferSeg]
+    77 00000031 8EC3                    		mov		es,bx
+    78                                  
+    79 00000033 B300                    		mov		bl,0
+    80 00000035 A1[480D]                		mov		ax,[XOffset]
+    81                                  ;		call	Hex16
+    82 00000038 B301                    		mov		bl,1
+    83 0000003A A1[4A0D]                		mov		ax,[YOffset]
+    84                                  ;		call	Hex16
+    85 0000003D B302                    		mov		bl,2
+    86 0000003F A1[4C0D]                		mov		ax,[ZOffset]
+    87                                  ;		call	Hex16
+    88                                  
+    89 00000042 B304                    		mov		bl,4
+    90 00000044 A1[AA87]                		mov		ax,[XAngle]
+    91                                  ;		call	Hex16
+    92 00000047 B305                    		mov		bl,5
+    93 00000049 A1[AC87]                		mov		ax,[YAngle]
+    94                                  ;		call	Hex16
+    95 0000004C B306                    		mov		bl,6
+    96 0000004E A1[AE87]                		mov		ax,[ZAngle]
+    97                                  ;		call	Hex16
+    98                                  
+    99 00000051 B308                    	mov		bl,8
+   100 00000053 A1[4E13]                	mov		ax,[testx]
+   101 00000056 E8410A                  	call	Hex16
+   102 00000059 B309                    	mov		bl,9
+   103 0000005B A1[5013]                	mov		ax,[testy]
+   104 0000005E E8390A                  	call	Hex16
+   105 00000061 B30A                    	mov		bl,10
+   106 00000063 A1[5213]                	mov		ax,[testz]
+   107 00000066 E8310A                  	call	Hex16
+   108                                  
+   109 00000069 8B1E[5213]              	mov		bx,[testz]
+   110 0000006D 8B2E[4E13]              	mov		bp,[testx]
+   111 00000071 8B0E[5013]              	mov		cx,[testy]
+   112 00000075 E89D0A                  	call	Perspective16
+   113                                  
+   114 00000078 30FF                    	xor		bh,bh
+   115 0000007A 53                      	push	bx
+   116 0000007B B30C                    	mov		bl,12
+   117                                  ;	call	Hex16
+   118                                  	
+   119 0000007D 58                      	pop		ax
+   120 0000007E B30D                    	mov		bl,13
+   121                                  ;	call	Hex8
+   122                                  
+   123 00000080 8B1E[5213]              	mov		bx,[testz]
+   124 00000084 8B2E[4E13]              	mov		bp,[testx]
+   125 00000088 8B0E[5013]              	mov		cx,[testy]
+   126 0000008C E8860A                  	call	Perspective16	; in = bl=z/ah=v/dx=h/dh=hsign - out = bl=v/ax=h
+   127 0000008F 89D5                    	mov		bp,dx
+   128 00000091 30FF                    	xor		bh,bh
+   129 00000093 E8CD03                  	call	Plot11
+   130                                  
+   131 00000096 BBFF01                  	mov		bx,511
+   132 00000099 BDFF01                  	mov		bp,511
+   133 0000009C B90000                  	mov		cx,0
+   134 0000009F E8730A                  	call	Perspective16
+   135 000000A2 89D5                    	mov		bp,dx
+   136 000000A4 30FF                    	xor		bh,bh
+   137 000000A6 E8BA03                  	call	Plot11
+   138                                  
+   139 000000A9 BBFF01                  	mov		bx,511
+   140 000000AC BD0000                  	mov		bp,0
+   141 000000AF B90000                  	mov		cx,0
+   142 000000B2 E8600A                  	call	Perspective16
+   143 000000B5 89D5                    	mov		bp,dx
+   144 000000B7 30FF                    	xor		bh,bh
+   145 000000B9 E8A703                  	call	Plot11
+   146                                  
+   147 000000BC BBFF01                  	mov		bx,511
+   148 000000BF BDFF01                  	mov		bp,511
+   149 000000C2 B9FF01                  	mov		cx,511
+   150 000000C5 E84D0A                  	call	Perspective16
+   151 000000C8 89D5                    	mov		bp,dx
+   152 000000CA 30FF                    	xor		bh,bh
+   153 000000CC E89403                  	call	Plot11
+   154                                  
+   155 000000CF BBFF01                  	mov		bx,511
+   156 000000D2 BD0000                  	mov		bp,0
+   157 000000D5 B9FF01                  	mov		cx,511
+   158 000000D8 E83A0A                  	call	Perspective16
+   159 000000DB 89D5                    	mov		bp,dx
+   160 000000DD 30FF                    	xor		bh,bh
+   161 000000DF E88103                  	call	Plot11
+   162                                  
+   163 000000E2 BB0000                  	mov		bx,0
+   164 000000E5 BDFF01                  	mov		bp,511
+   165 000000E8 B90000                  	mov		cx,0
+   166 000000EB E8270A                  	call	Perspective16
+   167 000000EE 89D5                    	mov		bp,dx
+   168 000000F0 30FF                    	xor		bh,bh
+   169 000000F2 E86E03                  	call	Plot11
+   170                                  
+   171 000000F5 BB0000                  	mov		bx,0
+   172 000000F8 BD0000                  	mov		bp,0
+   173 000000FB B90000                  	mov		cx,0
+   174 000000FE E8140A                  	call	Perspective16
+   175 00000101 89D5                    	mov		bp,dx
+   176 00000103 30FF                    	xor		bh,bh
+   177 00000105 E85B03                  	call	Plot11
+   178                                  
+   179 00000108 BB0000                  	mov		bx,0
+   180 0000010B BDFF01                  	mov		bp,511
+   181 0000010E B9FF01                  	mov		cx,511
+   182 00000111 E8010A                  	call	Perspective16
+   183 00000114 89D5                    	mov		bp,dx
+   184 00000116 30FF                    	xor		bh,bh
+   185 00000118 E84803                  	call	Plot11
+   186                                  
+   187 0000011B BB0000                  	mov		bx,0
+   188 0000011E BD0000                  	mov		bp,0
+   189 00000121 B9FF01                  	mov		cx,511
+   190 00000124 E8EE09                  	call	Perspective16
+   191 00000127 89D5                    	mov		bp,dx
+   192 00000129 30FF                    	xor		bh,bh
+   193 0000012B E83503                  	call	Plot11
+   194                                  
+   195 0000012E A1[AA87]                		mov	ax,[XAngle]
+   196 00000131 83C001                  		add	ax,1
+   197 00000134 25FF03                  		and ax,03ffh
+   198 00000137 A3[AA87]                		mov	[XAngle],ax
+   199 0000013A A1[AC87]                		mov	ax,[YAngle]
+   200 0000013D 83E801                  		sub	ax,1
+   201 00000140 25FF03                  		and ax,03ffh
+   202 00000143 A3[AC87]                		mov	[YAngle],ax
+   203 00000146 A1[AE87]                		mov	ax,[ZAngle]
+   204 00000149 83C001                  		add	ax,1
+   205 0000014C 25FF03                  		and ax,03ffh
+   206 0000014F A3[AE87]                		mov	[ZAngle],ax
+   207                                  ;		call	BuildRotateMatrix
+   208                                  
+   209                                  ;		mov word	[XOffset],0
+   210                                  ;		mov word	[YOffset],0
+   211                                  ;		mov word	[ZOffset],250
+   212 00000152 BE[D00C]                		mov	si,ObjectPoints00 ; points
+   213 00000155 BF[300D]                		mov	di,ObjectLines00 ; lines
+   214 00000158 B108                    		mov	cl,8 ; 8 		; points
+   215 0000015A B50C                    		mov	ch,12 ; 12	; lines
+   216                                  ;		call 		DrawObject
+   217                                  
+   218 0000015C B316                    		mov		bl,22
+   219 0000015E A1[BD87]                		mov		ax,[Test0]
+   220 00000161 E83609                  		call	Hex16
+   221 00000164 B317                    		mov		bl,23
+   222 00000166 A1[BF87]                		mov		ax,[Test1]
+   223 00000169 E82E09                  		call	Hex16
+   224 0000016C B318                    		mov		bl,24
+   225 0000016E A1[C187]                		mov		ax,[Test2]
+   226                                  ;		call	Hex16
+   227 00000171 B319                    		mov		bl,25
+   228 00000173 A1[C387]                		mov		ax,[Test3]
+   229                                  ;		call	Hex16
+   230                                  ;		mov		bl,26
+   231                                  ;		mov		ax,[Test4]
+   232                                  ;		call	Hex16
+   233                                  ;		mov		bl,27
+   234                                  ;		mov		ax,[Test5]
+   235                                  ;		call	Hex16
+   236                                  ;		mov		bl,28
+   237                                  ;		mov		ax,[Test6]
+   238                                  ;		call	Hex16
+   239                                  ;		mov		bl,29
+   240                                  ;		mov		ax,[Test7]
+   241                                  ;		call	Hex16
+   242                                  ;		mov		bl,30
+   243                                  ;		mov		ax,[Test8]
+   244                                  ;		call	Hex16
+   245                                  ;		mov		bl,31
+   246                                  ;		mov		ax,[Test9]
+   247                                  ;		call	Hex16
+   248                                  
+   249 00000176 B314                    		mov		bl,20
+   250 00000178 B85020                  		mov		ax,8192+80
+   251                                  ;		call	Hex16
+   252 0000017B B315                    		mov		bl,21
+   253 0000017D B850E0                  		mov		ax,-8192+80
+   254                                  ;		call	Hex16
+   255                                  	
+   256                                  		
+   257                                  ;		call	Test
+   258                                  		
+   259 00000180 E8D701                  		call	GetKey
+   260                                  		
+   261 00000183 A0[B087]                	mov		al,[Exit]
+   262 00000186 08C0                    	or		al,al
+   263 00000188 7503E99AFE              	je		MainLoop
+   264                                  
+   265 0000018D B80300                  Done:	mov		ax,3	; reset to text mode
+   266 00000190 CD10                    		int		10h
+   267 00000192 B44C                    		mov		ah,4ch	; exit to DOS
+   268 00000194 CD21                    		int		21h
+   269                                  
+   270 00000196 8D3E[0000]              BuildScreenTable:	lea		di,[BackBufferTable]
+   271 0000019A 31ED                    					xor		bp,bp	; even lines
+   272 0000019C B96400                  					mov		cx,100
+   273 0000019F 892D                    .loop:					mov		[di],bp
+   274 000001A1 81C50020                						add		bp,8192
+   275 000001A5 896D02                  						mov		[di+2],bp
+   276 000001A8 81EDB01F                						sub		bp,8192-80
+   277 000001AC 83C704                  						add		di,4
+   278 000001AF E2EE                    						loop	.loop
+   279 000001B1 C3                      					ret
+   280                                  
+   281 000001B2 39F2                    Line11:		cmp		dx,si 	; vs le ve?
+   282 000001B4 7306                    			jnc		.noswap	; yes
+   283 000001B6 87F2                    				xchg	si,dx	; swap vs,ve
+   284 000001B8 87E9                    				xchg	bp,cx	; swap hs,he
+   285 000001BA EB06                    				jmp	.vdiff
+   286                                  
+   287 000001BC 7504                    .noswap:	jne		.vdiff			; v not same
+   288 000001BE 39E9                    			cmp		cx,bp		; v is same 
+   289 000001C0 7436                    			je 		.quit		; h is same
+   290                                  
+   291 000001C2 29F2                    .vdiff:		sub		dx,si	; ver diff = ve-vs
+   292 000001C4 29E9                    			sub		cx,bp	; hs le he? - replace with sub below? todo
+   293 000001C6 7360                    			jnc		.hforward	; yes
+   294                                  
+   295 000001C8 F7D9                    .hbackward:	neg 	cx	 		; decrement line across everytime and line down every few times
+   296 000001CA 39D1                     			cmp		cx,dx
+   297 000001CC 7501                    			jne		.hbnodiag ; .quit ; .vbackward ; .quit ;	.vbackward
+   298 000001CE 41                      					inc		cx	; diagonal
+   299 000001CF 7228                    .hbnodiag:	jc		.vbackward
+   300                                  
+   301 000001D1 F7F1                    			div 	cx		; dx:ax *bx = ax*65536 *bx
+   302 000001D3 01F6                    			add		si,si	; start ver *2
+   303 000001D5 01ED                    			add		bp,bp	; start hor *2
+   304 000001D7 81C6[0000]              			add		si,BackBufferTable
+   305 000001DB 3E8B3C                  			mov		di,[ds:si]	; lookup start ver		
+   306                                  	
+   307 000001DE 00E0                    .hbloop:		add 	al,ah	; fraction to current
+   308 000001E0 7306                    				jnc		.hbplot	;
+   309 000001E2 83C602                  					add		si,2
+   310 000001E5 3E8B3C                  					mov		di,[ds:si]	; lookup start ver
+   311                                  
+   312 000001E8 8B9E[000A]              .hbplot:		mov		bx,[HorPosTable+bp]
+   313 000001EC 8AB6[0000]              				mov		dh,[OrTable+bp]
+   314 000001F0 260831                  				or byte [es:di+bx],dh
+   315                                  
+   316 000001F3 83ED02                  				sub		bp,2		; next hor
+   317 000001F6 E2E6                    				loop	.hbloop		; dec cx jnz
+   318 000001F8 C3                      .quit:		ret
+   319                                  
+   320 000001F9 87D1                    .vbackward: xchg 	dx,cx			; decrement line down everytime and line across every few times
+   321 000001FB F7F1                    			div 	cx		; dx:ax *bx = ax*65536 *bx
+   322                                  
+   323 000001FD 01F6                    			add		si,si	; start ver *2
+   324 000001FF 01ED                    			add		bp,bp	; start hor *2
+   325 00000201 81C6[0000]              			add		si,BackBufferTable
+   326                                  	
+   327 00000205 8AB6[0000]              			mov		dh,[OrTable+bp]
+   328 00000209 8B9E[000A]              			mov		bx,[HorPosTable+bp]
+   329                                  	
+   330 0000020D 00E0                    .vbloop:		add 	al,ah	; fraction to current
+   331 0000020F 730B                    				jnc		.vbplot	;
+   332 00000211 83ED02                  					sub		bp,2
+   333 00000214 8AB6[0000]              					mov		dh,[OrTable+bp]
+   334 00000218 8B9E[000A]              					mov		bx,[HorPosTable+bp]
+   335                                  		
+   336 0000021C 3E8B3C                  .vbplot:		mov		di,[ds:si]	; lookup start ver
+   337 0000021F 260831                  				or byte [es:di+bx],dh
+   338                                  
+   339 00000222 83C602                  				add		si,2		; next ver
+   340 00000225 E2E6                    				loop	.vbloop		; dec cl jnz
+   341 00000227 C3                      			ret
+   342                                  
+   343 00000228 39D1                    .hforward: 	cmp		cx,dx			; increment line across everytime and line down every few times
+   344 0000022A 7501                    			jne		.hfnodiag
+   345 0000022C 41                      				inc 	cx	; diagonal
+   346 0000022D 7228                    .hfnodiag:	jc		.vforward
+   347                                  
+   348 0000022F F7F1                    			div 	cx		; dx:ax *bx = ax*65536 *bx
+   349 00000231 01F6                    			add		si,si	; start ver *2
+   350 00000233 01ED                    			add		bp,bp	; start hor *2
+   351 00000235 81C6[0000]              			add		si,BackBufferTable
+   352 00000239 3E8B3C                  			mov		di,[ds:si]	; lookup start ver
+   353                                  
+   354 0000023C 00E0                    .hfloop:		add 	al,ah	; fraction to current
+   355 0000023E 7306                    				jnc		.hfplot	;
+   356 00000240 83C602                  					add		si,2
+   357 00000243 3E8B3C                  					mov		di,[ds:si]	; lookup start ver		
+   358                                  
+   359 00000246 8B9E[000A]              .hfplot:		mov		bx,[HorPosTable+bp]
+   360 0000024A 8AB6[0000]              				mov		dh,[OrTable+bp]
+   361 0000024E 260831                  				or byte [es:di+bx],dh
+   362                                  
+   363 00000251 83C502                  				add		bp,2		; next hor
+   364 00000254 E2E6                    				loop	.hfloop		; dec cx jnz
+   365 00000256 C3                      			ret
+   366                                  
+   367                                  ;	mov		di,[ds:si]
+   368                                  
+   369 00000257 87D1                    .vforward:	xchg 	dx,cx			; increment line down everytime and line across every few times
+   370 00000259 F7F1                    			div 	cx		; dx:ax *bx = ax*65536 *bx
+   371                                  
+   372 0000025B 01F6                    			add		si,si	; start ver *2
+   373 0000025D 01ED                    			add		bp,bp	; start hor *2
+   374 0000025F 81C6[0000]              			add		si,BackBufferTable
+   375                                  
+   376 00000263 8AB6[0000]              			mov		dh,[OrTable+bp]
+   377 00000267 8B9E[000A]              			mov		bx,[HorPosTable+bp]
+   378                                  	
+   379 0000026B 00E0                    .vfloop:		add 	al,ah	; fraction to current
+   380 0000026D 730B                    				jnc		.vfplot	;
+   381 0000026F 83C502                  					add		bp,2
+   382 00000272 8AB6[0000]              					mov		dh,[OrTable+bp]
+   383 00000276 8B9E[000A]              					mov		bx,[HorPosTable+bp]
+   384                                  		
+   385 0000027A 3E8B3C                  .vfplot:		mov		di,[ds:si]	; lookup start ver
+   386 0000027D 260831                  				or byte [es:di+bx],dh
+   387                                  
+   388 00000280 83C602                  				add		si,2		; next ver
+   389 00000283 E2E6                    				loop	.vfloop		; dec cl jnz
+   390 00000285 C3                      			ret
+   391                                  
+   392 00000286 39F2                    Line00:		cmp		dx,si 	; vs le ve?
+   393 00000288 7306                    			jnc		.noswap	; yes
+   394 0000028A 87F2                    				xchg	si,dx	; swap vs,ve
+   395 0000028C 87E9                    				xchg	bp,cx	; swap hs,he
+   396 0000028E EB06                    				jmp	.vdiff
+   397                                  
+   398 00000290 7504                    .noswap:	jne		.vdiff			; v not same
+   399 00000292 39E9                    				cmp		cx,bp		; v is same 
+   400 00000294 7436                    				je 		.quit		; h is same
+   401                                  
+   402 00000296 29F2                    .vdiff:		sub		dx,si	; ver diff = ve-vs
+   403 00000298 29E9                    			sub		cx,bp	; hs le he? - replace with sub below? todo
+   404 0000029A 7360                    			jnc		.hforward	; yes
+   405                                  
+   406 0000029C F7D9                    .hbackward:	neg 	cx		; decrement line across everytime and line down every few times
+   407                                   
+   408 0000029E 39D1                    			cmp		cx,dx
+   409 000002A0 7501                    			jne		.hbnodiag ; .quit ; .vbackward ; .quit ;	.vbackward
+   410 000002A2 41                      				inc	cx	; diagonal
+   411 000002A3 7228                    .hbnodiag:	jc		.vbackward
+   412                                  
+   413 000002A5 F7F1                    			div 	cx		; dx:ax *bx = ax*65536 *bx
+   414 000002A7 01F6                    			add		si,si	; start ver *2
+   415 000002A9 01ED                    			add		bp,bp	; start hor *2
+   416 000002AB 81C6[0000]              			add		si,BackBufferTable
+   417 000002AF 3E8B3C                  			mov		di,[ds:si]	; lookup start ver
+   418                                  	
+   419 000002B2 00E0                    .hbloop:		add 	al,ah	; fraction to current
+   420 000002B4 7306                    				jnc		.hbplot	;
+   421 000002B6 83C602                  					add		si,2
+   422 000002B9 3E8B3C                  					mov		di,[ds:si]	; lookup start ver
+   423                                  
+   424 000002BC 8B9E[000A]              .hbplot:		mov		bx,[HorPosTable+bp]
+   425 000002C0 8AB6[0005]              				mov		dh,[AndTable+bp]
+   426 000002C4 262031                  				and byte [es:di+bx],dh
+   427                                  
+   428 000002C7 83ED02                  				sub		bp,2		; next hor
+   429 000002CA E2E6                    				loop	.hbloop		; dec cx jnz
+   430 000002CC C3                      .quit:		ret
+   431                                  
+   432 000002CD 87D1                    .vbackward:	xchg 	dx,cx		; decrement line down everytime and line across every few times
+   433 000002CF F7F1                    			div 	cx		; dx:ax *bx = ax*65536 *bx
+   434                                  
+   435 000002D1 01F6                    			add		si,si	; start ver *2
+   436 000002D3 01ED                    			add		bp,bp	; start hor *2
+   437 000002D5 81C6[0000]              			add		si,BackBufferTable
+   438 000002D9 8AB6[0005]              			mov		dh,[AndTable+bp]
+   439 000002DD 8B9E[000A]              			mov		bx,[HorPosTable+bp]
+   440                                  	
+   441 000002E1 00E0                    .vbloop:		add 	al,ah	; fraction to current
+   442 000002E3 730B                    				jnc		.vbplot	;
+   443 000002E5 83ED02                  					sub		bp,2
+   444 000002E8 8AB6[0005]              					mov		dh,[AndTable+bp]
+   445 000002EC 8B9E[000A]              					mov		bx,[HorPosTable+bp]
+   446                                  		
+   447 000002F0 3E8B3C                  .vbplot:		mov		di,[ds:si]	; lookup start ver
+   448 000002F3 262031                  				and byte [es:di+bx],dh
+   449                                  
+   450 000002F6 83C602                  				add		si,2		; next ver
+   451 000002F9 E2E6                    				loop	.vbloop		; dec cl jnz
+   452 000002FB C3                      			ret
+   453                                  
+   454 000002FC 39D1                    .hforward: 	cmp		cx,dx		; increment line across everytime and line down every few times
+   455 000002FE 7501                    			jne		.hfnodiag
+   456 00000300 41                      				inc 	cx	; diagonal
+   457 00000301 7228                    .hfnodiag:	jc		.vforward
+   458                                  
+   459 00000303 F7F1                    			div 	cx		; dx:ax *bx = ax*65536 *bx
+   460 00000305 01F6                    			add		si,si	; start ver *2
+   461 00000307 01ED                    			add		bp,bp	; start hor *2
+   462 00000309 81C6[0000]              			add		si,BackBufferTable
+   463 0000030D 3E8B3C                  			mov		di,[ds:si]	; lookup start ver
+   464                                  	
+   465 00000310 00E0                    .hfloop:		add 	al,ah	; fraction to current
+   466 00000312 7306                    				jnc		.hfplot	;
+   467 00000314 83C602                  					add		si,2
+   468 00000317 3E8B3C                  					mov		di,[ds:si]	; lookup start ver		
+   469                                  
+   470 0000031A 8B9E[000A]              .hfplot:		mov		bx,[HorPosTable+bp]
+   471 0000031E 8AB6[0005]              				mov		dh,[AndTable+bp]
+   472 00000322 262031                  				and byte [es:di+bx],dh
+   473                                  	
+   474 00000325 83C502                  				add		bp,2		; next hor
+   475 00000328 E2E6                    				loop	.hfloop		; dec cx jnz
+   476 0000032A C3                      			ret
+   477                                  
+   478 0000032B 87D1                    .vforward: 	xchg 	dx,cx			; increment line down everytime and line across every few times
+   479 0000032D F7F1                    			div 	cx		; dx:ax *bx = ax*65536 *bx
+   480                                  
+   481 0000032F 01F6                    			add		si,si	; start ver *2
+   482 00000331 01ED                    			add		bp,bp	; start hor *2
+   483 00000333 81C6[0000]              			add		si,BackBufferTable
+   484 00000337 8AB6[0005]              			mov		dh,[AndTable+bp]
+   485 0000033B 8B9E[000A]              			mov		bx,[HorPosTable+bp]
+   486                                  	
+   487 0000033F 00E0                    .vfloop:		add 	al,ah	; fraction to current
+   488 00000341 730B                    				jnc		.vfplot	;
+   489 00000343 83C502                  					add		bp,2
+   490 00000346 8AB6[0005]              					mov		dh,[AndTable+bp]
+   491 0000034A 8B9E[000A]              					mov		bx,[HorPosTable+bp]
+   492                                  		
+   493 0000034E 3E8B3C                  .vfplot:		mov		di,[ds:si]	; lookup start ver
+   494 00000351 262031                  				and byte [es:di+bx],dh
+   495                                  
+   496 00000354 83C602                  				add		si,2		; next ver
+   497 00000357 E2E6                    				loop	.vfloop		; dec cl jnz
+   498 00000359 C3                      			ret
+   499                                  
+   500                                  GetKey:
+   501 0000035A B411                    	mov	ah,11h
+   502 0000035C CD16                    	int	16h         	; has a key been pressed
+   503 0000035E 7426                    	jz	.key_none ; no
+   504 00000360 B410                    	mov	ah,10h      ; yes 
+   505 00000362 CD16                    	int	16h         	; get it in AX (al= ascii, ah=scan code)
+   506 00000364 3C1B                    	cmp	al,KEY_ESC
+   507 00000366 741F                    	je	.key_esc
+   508 00000368 3D3102                  	cmp 	ax,KEY_1
+   509 0000036B 7420                    	je 	.key_1
+   510 0000036D 3D3203                  	cmp 	ax,KEY_2
+   511 00000370 742F                    	je 	.key_2
+   512 00000372 3D3304                  	cmp 	ax,KEY_3
+   513 00000375 743E                    	je 	.key_3
+   514 00000377 3D3405                  	cmp 	ax,KEY_4
+   515 0000037A 744D                    	je 	.key_4
+   516 0000037C 3D3506                  	cmp 	ax,KEY_5
+   517 0000037F 745C                    	je 	.key_5
+   518 00000381 3D3607                  	cmp 	ax,KEY_6
+   519 00000384 746B                    	je 	.key_6
+   520                                  .key_none:
+   521 00000386 C3                      	ret
+   522                                  .key_esc:
+   523 00000387 B001                    	mov	al,1
+   524 00000389 A2[B087]                	mov	[Exit],al
+   525 0000038C C3                      	ret
+   526                                  .key_1:
+   527 0000038D A1[480D]                	mov ax,[XOffset]
+   528 00000390 83E825                  	sub ax,37
+   529 00000393 A3[480D]                	mov [XOffset],ax
+   530 00000396 A1[4E13]                	mov ax,[testx]
+   531 00000399 48                      	dec ax
+   532 0000039A 25FF01                  	and ax,511
+   533 0000039D A3[4E13]                	mov [testx],ax
+   534 000003A0 C3                      	ret
+   535                                  .key_2:
+   536 000003A1 A1[480D]                	mov ax,[XOffset]
+   537 000003A4 83C025                  	add ax,37
+   538 000003A7 A3[480D]                	mov [XOffset],ax
+   539 000003AA A1[4E13]                	mov ax,[testx]
+   540 000003AD 40                      	inc ax
+   541 000003AE 25FF01                  	and ax,511
+   542 000003B1 A3[4E13]                	mov [testx],ax
+   543 000003B4 C3                      	ret
+   544                                  .key_3:
+   545 000003B5 A1[4A0D]                	mov ax,[YOffset]
+   546 000003B8 83E825                  	sub ax,37
+   547 000003BB A3[4A0D]                	mov [YOffset],ax
+   548 000003BE A1[5013]                	mov ax,[testy]
+   549 000003C1 48                      	dec ax
+   550 000003C2 25FF01                  	and ax,511
+   551 000003C5 A3[5013]                	mov [testy],ax
+   552 000003C8 C3                      	ret
+   553                                  .key_4:
+   554 000003C9 A1[4A0D]                	mov ax,[YOffset]
+   555 000003CC 83C025                  	add ax,37
+   556 000003CF A3[4A0D]                	mov [YOffset],ax
+   557 000003D2 A1[5013]                	mov ax,[testy]
+   558 000003D5 40                      	inc ax
+   559 000003D6 25FF01                  	and ax,511
+   560 000003D9 A3[5013]                	mov [testy],ax
+   561 000003DC C3                      	ret
+   562                                  .key_5:
+   563 000003DD A1[4C0D]                	mov ax,[ZOffset]
+   564 000003E0 83E825                  	sub ax,37
+   565 000003E3 A3[4C0D]                	mov [ZOffset],ax
+   566 000003E6 A1[5213]                	mov ax,[testz]
+   567 000003E9 48                      	dec ax
+   568 000003EA 25FF01                  	and ax,511
+   569 000003ED A3[5213]                	mov [testz],ax
+   570 000003F0 C3                      	ret
+   571                                  .key_6:
+   572 000003F1 A1[4C0D]                	mov ax,[ZOffset]
+   573 000003F4 83C025                  	add ax,37
+   574 000003F7 A3[4C0D]                	mov [ZOffset],ax
+   575 000003FA A1[5213]                	mov ax,[testz]
+   576 000003FD 40                      	inc ax
+   577 000003FE 25FF01                  	and ax,511
+   578 00000401 A3[5213]                	mov [testz],ax
+   579 00000404 C3                      	ret
+   580                                  
+   581 00000405 BADA03                  WaitVSync: 			mov		dx,INPUT_STATUS_1	; Wait for the leading edge of vertical sync pulse.
+   582 00000408 EC                      WaitNotVSyncLoop:		in		al,dx
+   583 00000409 2408                    						and		al,VSYNC_MASK
+   584 0000040B 75FB                    						jnz		WaitNotVSyncLoop
+   585 0000040D EC                      WaitVSyncLoop:			in		al,dx
+   586 0000040E 2408                    						and		al,VSYNC_MASK
+   587 00000410 74FB                    						jz		WaitVSyncLoop
+   588 00000412 C3                      					ret
+   589                                  		
+   590                                  CopyClearBackBuffer:
+   591 00000413 FC                      	cld
+   592                                  
+   593 00000414 8CDD                    	mov		bp,ds			; backup ds
+   594                                  
+   595 00000416 8B16[D187]              	mov		dx,[BackBufferSeg]
+   596 0000041A 8EDA                    	mov		ds,dx
+   597                                  
+   598 0000041C B800B8                  	mov		ax,VIDEO_SEGMENT
+   599 0000041F 8EC0                    	mov		es,ax
+   600                                  
+   601 00000421 31F6                    	xor		si,si		; DS:SI points to even back buffer
+   602 00000423 89F7                    	mov		di,si		; ES:DI points to CGA memory.
+   603                                  
+   604 00000425 B9A00F                  	mov		cx,4000
+   605 00000428 F3A5                    	rep	movsw			; copy from ds:si to es:di
+   606                                  
+   607 0000042A BE0020                  	mov		si,8192		; DS:SI points to odd back buffer
+   608 0000042D 89F7                    	mov		di,si		; ES:DI points to CGA memory.
+   609                                  
+   610 0000042F B9A00F                  	mov		cx,4000
+   611 00000432 F3A5                    	rep	movsw			; copy from ds:si to es:di
+   612                                  
+   613 00000434 8CD8                    	mov		ax,ds		; es points to ds
+   614 00000436 8EC0                    	mov		es,ax
+   615                                  
+   616 00000438 31C0                    	xor ax,ax ; mov		ax,00101101001011010b ;
+   617                                  	
+   618 0000043A 31FF                    	xor		di,di		; DS:SI points to even back buffer	
+   619 0000043C B9A00F                  	mov		cx,4000
+   620 0000043F F3AB                    	rep	stosw			; clear odd back buffer
+   621                                  
+   622 00000441 BF0020                  	mov		di,8192		; DS:SI points to odd back buffer	
+   623 00000444 B9A00F                  	mov		cx,4000
+   624 00000447 F3AB                    	rep	stosw			; clear odd back buffer
+   625                                  
+   626 00000449 8EDD                    	mov		ds,bp			; restore ds
+   627                                  
+   628 0000044B C3                      	ret
+   629                                  
+   630                                  Plot00:
+   631 0000044C 01DB                    	add		bx,bx 			; start ver *2
+   632 0000044E 8BBF[0000]              	mov		di,[BackBufferTable+bx]	; lookup start ver
+   633 00000452 01ED                    	add		bp,bp			; start hor *2
+   634 00000454 03BE[000A]              	add		di,[HorPosTable+bp]	; add start hor
+   635 00000458 268A0D                  	mov		cl,[es:di]
+   636 0000045B 228E[0005]              	and		cl,[AndTable+bp]
+   637 0000045F 26880D                  	mov		[es:di],cl
+   638 00000462 C3                      	ret
+   639                                  
+   640                                  Plot11:
+   641 00000463 01DB                    	add		bx,bx 			; start ver *2
+   642 00000465 8BBF[0000]              	mov		di,[BackBufferTable+bx]	; lookup start ver
+   643 00000469 01ED                    	add		bp,bp			; start hor *2
+   644 0000046B 03BE[000A]              	add		di,[HorPosTable+bp]	; add start hor
+   645 0000046F 268A0D                  	mov		cl,[es:di]
+   646 00000472 0A8E[0000]              	or		cl,[OrTable+bp] 
+   647 00000476 26880D                  	mov		[es:di],cl
+   648 00000479 C3                      	ret
+   649                                  
+   650                                  ; classify3d
+   651                                  ;  get z
+   652                                  ;  if minus
+   653                                  ;   classify eq 16
+   654                                  ;  else
+   655                                  ;   do perspective
+   656                                  ;    classify eq 0
+   657                                  ;    if x lt 32767-100
+   658                                  ;     classify eq 1
+   659                                  ;    if x gt 32767+100
+   660                                  ;    classify eq 2
+   661                                  ;   if y lt 32767-160
+   662                                  ;    classify +=4
+   663                                  ;   if y gt 32767+160
+   664                                  ;    classify +=8
+   665                                  	
+   666 0000047A 57                      DrawObject:		push	di ; object lines
+   667 0000047B 51                      				push	cx ; number of lines
+   668                                  
+   669                                  ;				mov		di,ObjectPointsResults
+   670                                  
+   671 0000047C 30ED                    				xor		ch,ch
+   672 0000047E FEC9                    				dec		cl
+   673 00000480 00C9                    				add		cl,cl
+   674 00000482 89CF                    				mov		di,cx	; point count
+   675                                  		
+   676 00000484 BBFF00                  				mov		bx,255 ; high = or clip codes / low = and clip codes
+   677                                  	
+   678 00000487 53                      .rotate_point_loop:	push	bx
+   679 00000488 3E8B0C                  					mov		cx,[ds:si]	; xpos
+   680 0000048B 3E8B4402                					mov		ax,[ds:si+2]	; ypos
+   681 0000048F 3E8B6C04                					mov		bp,[ds:si+4]	; zpos
+   682                                  		
+   683 00000493 E8A004                  					call	Rotate
+   684                                  
+   685 00000496 89C8                    					mov		ax,cx
+   686 00000498 89E9                    					mov		cx,bp
+   687 0000049A 89DD                    					mov		bp,bx
+   688                                  		
+   689 0000049C 0306[4A0D]              					add		ax,[YOffset]
+   690 000004A0 8985[9485]              					mov		[ObjectYRot+di],ax 		; yrot
+   691                                  
+   692 000004A4 032E[480D]              					add		bp,[XOffset]
+   693 000004A8 89AD[9484]              					mov		[ObjectXRot+di],bp 			; xrot
+   694                                  
+   695 000004AC 030E[4C0D]              					add		cx,[ZOffset]
+   696 000004B0 898D[9486]              					mov		[ObjectZRot+di],cx 	; zrot
+   697                                  
+   698 000004B4 7904                    					jns		.point_in_front
+   699 000004B6 B210                    						mov		dl,BEHIND_CC
+   700 000004B8 EB0E                    						jmp		.point_behind	
+   701                                  
+   702 000004BA E82D05                  .point_in_front:	call	Perspective
+   703 000004BD 8985[9481]              					mov		[ObjectYPos+di],ax 		; xpos
+   704 000004C1 89AD[9482]              					mov		[ObjectXPos+di],bp 		; ypos
+   705 000004C5 E8FD04                  					call	ClassifyPoint
+   706                                  
+   707 000004C8 8895[9483]              .point_behind:		mov		[ObjectClipCode+di],dl 	; clip code
+   708                                  
+   709 000004CC 5B                      					pop		bx
+   710 000004CD 20D3                    					and		bl,dl	; object and clip code
+   711 000004CF 08D7                    					or		bh,dl	; object or clip code
+   712                                  		
+   713 000004D1 83C606                  					add		si,6				
+   714 000004D4 83EF02                  					sub		di,2
+   715 000004D7 79AE                    					jns		.rotate_point_loop
+   716                                  
+   717 000004D9 59                      				pop		cx 	; number of lines
+   718 000004DA 5E                      				pop 	si 	; object lines
+   719                                  
+   720 000004DB 80FB00                  				cmp		bl,0				; if and_object_clip_code ne 0 all off one side so exit
+   721 000004DE 7530                    				jnz		.off_screen
+   722                                   
+   723 000004E0 80FF00                  				cmp		bh,0				; if or_object_clip_code eq 0 all on screen so no clip needed
+   724 000004E3 752C                    				jnz		.draw_clipped_object
+   725                                  
+   726                                  .draw_whole_object:
+   727 000004E5 51                      .draw_whole_object_line_loop:	push	cx
+   728 000004E6 56                      								push	si
+   729                                  
+   730 000004E7 30FF                    								xor		bh,bh
+   731 000004E9 3E8A1C                  								mov		bl,[ds:si]
+   732 000004EC 00DB                    								add		bl,bl	
+   733 000004EE 8B8F[9481]              								mov		cx,[ObjectYPos+bx] ; endy
+   734 000004F2 8B97[9482]              								mov		dx,[ObjectXPos+bx] ; endx
+   735                                   
+   736 000004F6 3E8A5C01                								mov		bl,[ds:si+1]
+   737 000004FA 00DB                    								add		bl,bl
+   738 000004FC 8BAF[9481]              								mov		bp,[ObjectYPos+bx] ; starty
+   739 00000500 8BB7[9482]              								mov		si,[ObjectXPos+bx] ; startx
+   740 00000504 E87FFD                  								call	Line00
+   741                                  	 
+   742 00000507 5E                      								pop		si
+   743 00000508 59                      								pop		cx
+   744 00000509 83C602                  								add		si,2
+   745                                  
+   746 0000050C FECD                    								dec		ch
+   747 0000050E 75D5                    								jnz		.draw_whole_object_line_loop
+   748                                  
+   749 00000510 C3                      .off_screen:				ret
+   750                                  	
+   751                                  .draw_clipped_object:	
+   752 00000511 30FF                    .draw_clipped_object_line_loop:	xor		bh,bh
+   753 00000513 51                      								push	cx
+   754 00000514 56                      								push	si
+   755                                  		
+   756 00000515 3E8A1C                  								mov		bl,[ds:si]
+   757 00000518 00DB                    								add		bl,bl
+   758 0000051A 8A87[9483]              								mov		al,[ObjectClipCode+bx] 	; start clip code
+   759 0000051E 3E8A5C01                								mov		bl,[ds:si+1]
+   760 00000522 00DB                    								add		bl,bl
+   761 00000524 8AA7[9483]              								mov		ah,[ObjectClipCode+bx] 	; end clip code
+   762                                  
+   763 00000528 88C3                    								mov		bl,al		; backup start clip code
+   764 0000052A 20E3                    								and		bl,ah	; both points are off 
+   765 0000052C 7522                    								jnz		.line_off_screen	; then line is off screen
+   766                                  
+   767 0000052E 08E0                    								or		al,ah 	; if any point is off
+   768 00000530 7528                    								jnz		.line_clip	; then line needs clipped
+   769                                  		
+   770 00000532 3E8A1C                  								mov		bl,[ds:si]
+   771 00000535 00DB                    								add		bl,bl	
+   772 00000537 8B8F[9481]              								mov		cx,[ObjectYPos+bx] ; starty
+   773 0000053B 8B97[9482]              								mov		dx,[ObjectXPos+bx] ; startx
+   774                                  
+   775 0000053F 3E8A5C01                								mov		bl,[ds:si+1]
+   776 00000543 00DB                    								add		bl,bl
+   777 00000545 8BAF[9481]              								mov		bp,[ObjectYPos+bx] ; endy 
+   778 00000549 8BB7[9482]              								mov		si,[ObjectXPos+bx] ; endx - todo - si is the problem?
+   779                                  
+   780 0000054D E862FC                  .draw_clipped_line:				call	Line11
+   781                                  
+   782 00000550 5E                      .line_off_screen:				pop		si
+   783 00000551 59                      								pop		cx
+   784 00000552 83C602                  								add		si,2
+   785                                  		
+   786 00000555 FECD                    								dec		ch
+   787 00000557 75B8                    								jnz		.draw_clipped_object_line_loop
+   788 00000559 C3                      							ret
+   789                                  
+   790                                  .line_clip:	; al = point 1 clip ; ah = point 2 clip
+   791                                  
+   792                                  ; copy point details to 2 sets of coords temp coords zyx and temp perspective xy
+   793                                  ; if either point is behind
+   794                                  ;  do z clip on required point
+   795                                  ;  do perspective
+   796                                  ;  do rest of tests
+   797                                  
+   798 0000055A 30FF                    					xor		bh,bh
+   799 0000055C 3E8A1C                  					mov		bl,[ds:si]
+   800 0000055F 00DB                    					add		bl,bl	
+   801 00000561 8B97[9484]              					mov		dx,[ObjectXRot+bx]
+   802 00000565 8916[B187]              					mov		[STX],dx
+   803 00000569 8B97[9485]              					mov		dx,[ObjectYRot+bx]
+   804 0000056D 8916[B387]              					mov		[STY],dx
+   805 00000571 8B97[9486]              					mov		dx,[ObjectZRot+bx]
+   806 00000575 8916[B587]              					mov		[STZ],dx
+   807 00000579 8B97[9482]              					mov		dx,[ObjectXPos+bx]
+   808 0000057D 8916[A087]              					mov		[XST],dx
+   809 00000581 8B97[9481]              					mov		dx,[ObjectYPos+bx]	
+   810 00000585 8916[A287]              					mov		[YST],dx	
+   811 00000589 8A87[9483]              					mov		al,[ObjectClipCode+bx]
+   812                                  	
+   813 0000058D 3E8A5C01                					mov		bl,[ds:si+1]
+   814 00000591 00DB                    					add		bl,bl
+   815 00000593 8B97[9484]              					mov		dx,[ObjectXRot+bx]
+   816 00000597 8916[B787]              					mov		[ENX],dx
+   817 0000059B 8B97[9485]              					mov		dx,[ObjectYRot+bx]
+   818 0000059F 8916[B987]              					mov		[ENY],dx
+   819 000005A3 8B97[9486]              					mov		dx,[ObjectZRot+bx]
+   820 000005A7 8916[BB87]              					mov		[ENZ],dx	
+   821 000005AB 8B97[9482]              					mov		dx,[ObjectXPos+bx]
+   822 000005AF 8916[A487]              					mov		[XEN],dx
+   823 000005B3 8B97[9481]              					mov		dx,[ObjectYPos+bx]
+   824 000005B7 8916[A687]              					mov		[YEN],dx
+   825 000005BB 8AA7[9483]              					mov		ah,[ObjectClipCode+bx]
+   826                                  
+   827 000005BF A3[A887]                					mov		[CCST],ax
+   828                                  	
+   829 000005C2 A1[A887]                .line_clip_loop:	mov		ax,[CCST]
+   830 000005C5 88C3                    					mov		bl,al			; start cc
+   831 000005C7 20E0                    					and		al,ah			; and with end cc
+   832 000005C9 7585                    					jnz		.line_off_screen		; both off same side
+   833                                  	
+   834 000005CB 08E3                    					or		bl,ah			; or with end cc
+   835 000005CD 7474                    					jz		.clip_draw_test		; all on so draw line
+   836                                  
+   837 000005CF F6C310                  .clip_behind_test:	test	bl,BEHIND_CC	; test if either point is off (al=al or ah)
+   838 000005D2 7413                    					jz		.clip_left_test
+   839 000005D4 E87F00                  					call	LineClipBehind
+   840                                  
+   841 000005D7 A1[A887]                					mov		ax,[CCST]
+   842 000005DA 88C3                    					mov		bl,al			; start cc
+   843 000005DC 20E0                    					and		al,ah			; and with end cc
+   844 000005DE 7403E96DFF              					jnz		.line_off_screen		; both off same side
+   845                                  
+   846 000005E3 08E3                    					or		bl,ah			; or with end cc
+   847 000005E5 745C                    					jz		.clip_draw_test		; all on so draw line
+   848                                  	
+   849 000005E7 F6C304                  .clip_left_test:	test	bl,LEFT_CC
+   850 000005EA 7413                    					jz		.clip_right_test
+   851 000005EC E84101                  					call	LineClipLeft
+   852 000005EF A1[A887]                					mov		ax,[CCST]
+   853 000005F2 88C3                    					mov		bl,al			; start cc
+   854 000005F4 20E0                    					and		al,ah			; and with end cc
+   855 000005F6 7403E955FF              					jnz		.line_off_screen		; both off same side
+   856                                  
+   857 000005FB 08E3                    					or		bl,ah			; or with end cc
+   858 000005FD 7444                    					jz		.clip_draw_test		; all on so draw line
+   859                                  		
+   860 000005FF F6C308                  .clip_right_test:	test	bl,RIGHT_CC
+   861 00000602 7413                    					jz		.clip_top_test
+   862 00000604 E88601                  					call	LineClipRight
+   863 00000607 A1[A887]                					mov		ax,[CCST]
+   864 0000060A 88C3                    					mov		bl,al			; start cc
+   865 0000060C 20E0                    					and		al,ah			; and with end cc
+   866 0000060E 7403E93DFF              					jnz		.line_off_screen		; both off same side
+   867                                  	
+   868 00000613 08E3                    					or		bl,ah			; or with end cc
+   869 00000615 742C                    					jz		.clip_draw_test		; all on so draw line
+   870                                  		
+   871                                  
+   872 00000617 F6C301                  .clip_top_test:		test	bl,TOP_CC
+   873 0000061A 7413                    					jz		.clip_bottom_test
+   874 0000061C E8B400                  					call	LineClipTop
+   875 0000061F A1[A887]                					mov		ax,[CCST]
+   876 00000622 88C3                    					mov		bl,al			; start cc
+   877 00000624 20E0                    					and		al,ah			; and with end cc
+   878 00000626 7403E925FF              					jnz		.line_off_screen		; both off same side
+   879                                  
+   880 0000062B 08E3                    					or		bl,ah			; or with end cc
+   881 0000062D 7414                    					jz		.clip_draw_test		; all on so draw line
+   882                                  
+   883 0000062F F6C302                  .clip_bottom_test:	test	bl,BOTTOM_CC
+   884 00000632 748E                    					jz		.line_clip_loop
+   885 00000634 E8B501                  					call	LineClipBottom
+   886 00000637 A1[A887]                					mov		ax,[CCST]
+   887 0000063A 88C3                    					mov		bl,al			; start cc
+   888 0000063C 20E0                    					and		al,ah			; and with end cc
+   889 0000063E 7403E90DFF              					jnz		.line_off_screen		; both off same side
+   890                                  
+   891 00000643 8B0E[A287]              .clip_draw_test:	mov		cx,[YST]
+   892 00000647 8B16[A087]              					mov		dx,[XST]
+   893 0000064B 8B2E[A687]              					mov		bp,[YEN]
+   894 0000064F 8B36[A487]              					mov		si,[XEN]
+   895 00000653 E9F7FE                  					jmp		.draw_clipped_line
+   896                                  	
+   897 00000656 F6C410                  LineClipBehind:	test	ah,BEHIND_CC
+   898 00000659 743C                    				jz		.behind_sback_efront
+   899 0000065B A1[B187]                .behind_sfront_eback:	mov		ax,[STX]
+   900 0000065E 8B0E[B587]              						mov		cx,[STZ]
+   901 00000662 8B3E[BB87]              						mov		di,[ENZ]
+   902 00000666 8B1E[B787]              						mov		bx,[ENX]
+   903 0000066A E8DC01                  						call	ClipBehind
+   904 0000066D 57                      						push	di
+   905                                  	
+   906 0000066E A1[B387]                						mov		ax,[STY]
+   907 00000671 8B0E[B587]              						mov		cx,[STZ]
+   908 00000675 8B3E[BB87]              						mov		di,[ENZ]
+   909 00000679 8B1E[B987]              						mov		bx,[ENY]
+   910 0000067D E8C901                  						call	ClipBehind
+   911                                  
+   912 00000680 89F8                    						mov		ax,di
+   913 00000682 5D                      						pop		bp
+   914                                  
+   915 00000683 31C9                    						xor		cx,cx
+   916 00000685 E86203                  						call	Perspective
+   917 00000688 A3[A687]                						mov		[YEN],ax 
+   918 0000068B 892E[A487]              						mov		[XEN],bp
+   919 0000068F E83303                  						call	ClassifyPoint
+   920 00000692 8816[A987]              						mov		[CCEN],dl
+   921 00000696 C3                      						ret
+   922 00000697 A1[B787]                .behind_sback_efront:	mov		ax,[ENX]
+   923 0000069A 8B0E[BB87]              						mov		cx,[ENZ]
+   924 0000069E 8B3E[B587]              						mov		di,[STZ]
+   925 000006A2 8B1E[B187]              						mov		bx,[STX]
+   926 000006A6 E8A001                  						call	ClipBehind
+   927 000006A9 57                      						push	di
+   928                                  	
+   929 000006AA A1[B987]                						mov		ax,[ENY]
+   930 000006AD 8B0E[BB87]              						mov		cx,[ENZ]
+   931 000006B1 8B3E[B587]              						mov		di,[STZ]
+   932 000006B5 8B1E[B387]              						mov		bx,[STY]
+   933 000006B9 E88D01                  						call	ClipBehind
+   934                                  
+   935 000006BC 89F8                    						mov		ax,di
+   936 000006BE 5D                      						pop		bp
+   937                                  		
+   938 000006BF 31C9                    						xor		cx,cx
+   939 000006C1 E82603                  						call	Perspective
+   940 000006C4 A3[A287]                						mov		[YST],ax 
+   941 000006C7 892E[A087]              						mov		[XST],bp 
+   942 000006CB E8F702                  						call	ClassifyPoint
+   943 000006CE 8816[A887]              						mov		[CCST],dl
+   944 000006D2 C3                      						ret
+   945                                  	
+   946 000006D3 F6C401                  LineClipTop:	test	ah,TOP_CC
+   947 000006D6 742C                    				jz		.top_p1on_p2off
+   948 000006D8 A1[A287]                .top_p1off_p2on:	mov		ax,[YST]
+   949 000006DB 8B0E[A087]              					mov		cx,[XST]
+   950 000006DF 8B3E[A487]              					mov		di,[XEN]
+   951 000006E3 8B1E[A687]              					mov		bx,[YEN]
+   952 000006E7 E86E01                  					call	ClipTop
+   953                                  
+   954 000006EA 893E[A687]              					mov		[YEN],di
+   955 000006EE BB0000                  					mov		bx,TOP_EDGE
+   956 000006F1 891E[A487]              					mov		[XEN],bx
+   957                                  
+   958 000006F5 A1[A687]                					mov		ax,[YEN]
+   959 000006F8 8B2E[A487]              					mov		bp,[XEN]
+   960 000006FC E8C602                  					call	ClassifyPoint
+   961 000006FF 8816[A987]              					mov		[CCEN],dl
+   962 00000703 C3                      					ret
+   963 00000704 A1[A687]                .top_p1on_p2off:	mov		ax,[YEN]
+   964 00000707 8B0E[A487]              					mov		cx,[XEN]
+   965 0000070B 8B3E[A087]              					mov		di,[XST]
+   966 0000070F 8B1E[A287]              					mov		bx,[YST]
+   967 00000713 E84201                  					call	ClipTop
+   968                                  
+   969 00000716 893E[A287]              					mov		[YST],di
+   970 0000071A BB0000                  					mov		bx,TOP_EDGE
+   971 0000071D 891E[A087]              					mov		[XST],bx
+   972                                  
+   973 00000721 A1[A287]                					mov		ax,[YST]
+   974 00000724 8B2E[A087]              					mov		bp,[XST]
+   975 00000728 E89A02                  					call	ClassifyPoint
+   976 0000072B 8816[A887]              					mov		[CCST],dl
+   977 0000072F C3                      					ret
+   978                                  	
+   979 00000730 F6C404                  LineClipLeft:	test	ah,LEFT_CC	; end clip code is off left?
+   980 00000733 742C                    				jz		.left_p1on_p2off
+   981 00000735 8B0E[A287]              .left_p1off_p2on:	mov		cx,[YST]
+   982 00000739 A1[A087]                					mov		ax,[XST]
+   983 0000073C 8B3E[A487]              					mov		di,[XEN]
+   984 00000740 8B1E[A687]              					mov		bx,[YEN]	
+   985 00000744 E82001                  					call	ClipLeft 	; ax returned 
+   986                                  	
+   987 00000747 891E[A487]              					mov		[XEN],bx
+   988 0000074B BB0000                  					mov		bx,LEFT_EDGE
+   989 0000074E 891E[A687]              					mov		[YEN],bx
+   990                                  		
+   991 00000752 A1[A687]                					mov		ax,[YEN]
+   992 00000755 8B2E[A487]              					mov		bp,[XEN]
+   993 00000759 E86902                  					call	ClassifyPoint
+   994 0000075C 8816[A987]              					mov		[CCEN],dl
+   995 00000760 C3                      					ret
+   996 00000761 8B0E[A687]              .left_p1on_p2off:	mov		cx,[YEN]
+   997 00000765 A1[A487]                					mov		ax,[XEN]
+   998 00000768 8B3E[A087]              					mov		di,[XST]
+   999 0000076C 8B1E[A287]              					mov		bx,[YST]
+  1000 00000770 E8F400                  					call	ClipLeft
+  1001                                  
+  1002 00000773 891E[A087]              					mov		[XST],bx
+  1003 00000777 BB0000                  					mov		bx,LEFT_EDGE
+  1004 0000077A 891E[A287]              					mov		[YST],bx
+  1005                                  
+  1006 0000077E A1[A287]                					mov		ax,[YST]
+  1007 00000781 8B2E[A087]              					mov		bp,[XST]
+  1008 00000785 E83D02                  					call	ClassifyPoint
+  1009 00000788 8816[A887]              					mov		[CCST],dl
+  1010 0000078C C3                      					ret
+  1011                                  
+  1012 0000078D F6C408                  LineClipRight:	test	ah,RIGHT_CC
+  1013 00000790 742D                    				jz		.right_p1on_p2off
+  1014 00000792 8B2E[A287]              .right_p1off_p2on:	mov		bp,[YST]
+  1015 00000796 8B16[A087]              					mov		dx,[XST]
+  1016 0000079A 8B3E[A487]              					mov		di,[XEN]
+  1017 0000079E 8B1E[A687]              					mov		bx,[YEN]	
+  1018 000007A2 E8E300                  					call	ClipRight
+  1019                                  
+  1020 000007A5 892E[A487]              					mov		[XEN],bp
+  1021 000007A9 BB3F01                  					mov		bx,RIGHT_EDGE
+  1022 000007AC 891E[A687]              					mov		[YEN],bx
+  1023                                  	
+  1024 000007B0 A1[A687]                					mov		ax,[YEN]
+  1025 000007B3 8B2E[A487]              					mov		bp,[XEN]
+  1026 000007B7 E80B02                  					call	ClassifyPoint
+  1027 000007BA 8816[A987]              					mov		[CCEN],dl		
+  1028 000007BE C3                      					ret
+  1029                                  
+  1030 000007BF 8B2E[A687]              .right_p1on_p2off:	mov		bp,[YEN]
+  1031 000007C3 8B16[A487]              					mov		dx,[XEN]
+  1032 000007C7 8B3E[A087]              					mov		di,[XST]
+  1033 000007CB 8B1E[A287]              					mov		bx,[YST]	
+  1034 000007CF E8B600                  					call	ClipRight
+  1035                                  
+  1036 000007D2 892E[A087]              					mov		[XST],bp
+  1037 000007D6 BB3F01                  					mov		bx,RIGHT_EDGE
+  1038 000007D9 891E[A287]              					mov		[YST],bx
+  1039                                  
+  1040 000007DD A1[A287]                					mov		ax,[YST]
+  1041 000007E0 8B2E[A087]              					mov		bp,[XST]
+  1042 000007E4 E8DE01                  					call	ClassifyPoint
+  1043 000007E7 8816[A887]              					mov		[CCST],dl
+  1044 000007EB C3                      					ret
+  1045                                  	
+  1046 000007EC F6C402                  LineClipBottom:	test	ah,BOTTOM_CC
+  1047 000007EF 742C                    				jz		.bottom_p1on_p2off
+  1048 000007F1 A1[A287]                .bottom_p1off_p2on:	mov		ax,[YST]
+  1049 000007F4 8B16[A087]              					mov		dx,[XST]
+  1050 000007F8 8B3E[A487]              					mov		di,[XEN]
+  1051 000007FC 8B1E[A687]              					mov		bx,[YEN]	
+  1052 00000800 E87300                  					call	ClipBottom
+  1053                                  
+  1054 00000803 890E[A687]              					mov		[YEN],cx
+  1055 00000807 BBC700                  					mov		bx,BOTTOM_EDGE
+  1056 0000080A 891E[A487]              					mov		[XEN],bx
+  1057                                  
+  1058 0000080E A1[A687]                					mov		ax,[YEN]
+  1059 00000811 8B2E[A487]              					mov		bp,[XEN]
+  1060 00000815 E8AD01                  					call	ClassifyPoint
+  1061 00000818 8816[A987]              					mov		[CCEN],dl		
+  1062 0000081C C3                      					ret
+  1063 0000081D A1[A687]                .bottom_p1on_p2off:	mov		ax,[YEN]
+  1064 00000820 8B16[A487]              					mov		dx,[XEN]
+  1065 00000824 8B3E[A087]              					mov		di,[XST]
+  1066 00000828 8B1E[A287]              					mov		bx,[YST]	
+  1067 0000082C E84700                  					call	ClipBottom
+  1068                                  
+  1069 0000082F 890E[A287]              					mov		[YST],cx
+  1070 00000833 BBC700                  					mov		bx,BOTTOM_EDGE
+  1071 00000836 891E[A087]              					mov		[XST],bx
+  1072                                  
+  1073 0000083A A1[A287]                					mov		ax,[YST]
+  1074 0000083D 8B2E[A087]              					mov		bp,[XST]
+  1075 00000841 E88101                  					call	ClassifyPoint
+  1076 00000844 8816[A887]              					mov		[CCST],dl
+  1077 00000848 C3                      					ret
+  1078                                  	
+  1079 00000849 89CD                    ClipBehind:	mov		bp,cx	; backup pon.z (onh)
+  1080 0000084B 29F9                    			sub		cx,di 	; pon.z-poff.z (dh)
+  1081                                  
+  1082 0000084D 89C7                    			mov		di,ax	; backup pon.x (onv)
+  1083 0000084F 29D8                    			sub		ax,bx	; pon.x-poff.x (dv)
+  1084                                  
+  1085 00000851 F7ED                    			imul	bp	; pon.x-poff.x (dx) * pon.z (onh) 
+  1086 00000853 F7F9                    			idiv	cx	; 	/ pon.z-poff.z (dh) (pon.z+poff.z)
+  1087                                  
+  1088 00000855 29C7                    			sub	di,ax
+  1089 00000857 C3                      			ret
+  1090                                  	
+  1091                                  ; input
+  1092                                  ; ax = x on screen ; pon.x = +ve
+  1093                                  ; bx = x off screen ; poff.x = -ve
+  1094                                  ; dx = y on screen ; pon.y
+  1095                                  ; di = y off screen ; poff.y
+  1096                                  ; output
+  1097                                  ; ax = clippedy
+  1098                                  
+  1099 00000858 89CD                    ClipTop:	mov		bp,cx	; backup pon.x (onh)
+  1100 0000085A 29F9                    			sub		cx,di 	; pon.x-poff.x (dh)
+  1101                                  
+  1102 0000085C 89C7                    			mov		di,ax	; backup pon.y (onv)
+  1103 0000085E 29D8                    			sub		ax,bx	; pon.y-poff.y (dv)
+  1104                                  
+  1105 00000860 F7ED                    			imul	bp	; pon.y-poff.y (dv) * pon.x (onh) 
+  1106 00000862 F7F9                    			idiv	cx	; 	/ pon.x-poff.x (dh) (pon.x+poff.x)
+  1107                                  
+  1108 00000864 29C7                    			sub		di,ax
+  1109 00000866 C3                      			ret
+  1110                                  
+  1111 00000867 89CD                    ClipLeft:	mov		bp,cx	; backup pon.x (onh)
+  1112 00000869 29D9                    			sub		cx,bx 	; pon.x-poff.x (dh)
+  1113                                  
+  1114 0000086B 89C3                    			mov		bx,ax	; backup pon.y (onv)
+  1115 0000086D 29F8                    			sub		ax,di	; pon.y-poff.y (dv)
+  1116                                  
+  1117 0000086F F7ED                    			imul	bp	; pon.y-poff.y (dv) * pon.x (onh) 
+  1118 00000871 F7F9                    			idiv	cx	; 	/ pon.x-poff.x (dh) (pon.x+poff.x)
+  1119                                  
+  1120 00000873 29C3                    			sub		bx,ax
+  1121 00000875 C3                      			ret
+  1122                                  
+  1123 00000876 BDC700                  ClipBottom:	mov		bp,BOTTOM_EDGE
+  1124 00000879 29D5                    			sub		bp,dx	; rightedge - pon.x (onh)
+  1125 0000087B 29D7                    			sub		di,dx	; poff.x - pon.x (dh)
+  1126                                  
+  1127 0000087D 89C1                    			mov		cx,ax
+  1128 0000087F 29D8                    			sub		ax,bx	; pon.y-poff.y (dv)
+  1129                                  
+  1130 00000881 F7ED                    			imul	bp
+  1131 00000883 F7FF                    			idiv	di
+  1132                                  	
+  1133 00000885 29C1                    			sub		cx,ax
+  1134 00000887 C3                      			ret
+  1135                                  
+  1136 00000888 B83F01                  ClipRight:	mov		ax,RIGHT_EDGE
+  1137 0000088B 29E8                    			sub		ax,bp	; rightedge - pon.x (onh)
+  1138 0000088D 29EB                    			sub		bx,bp	; poff.x - pon.x (dh)
+  1139                                  	
+  1140 0000088F 89D5                    			mov		bp,dx
+  1141 00000891 29FA                    			sub		dx,di	; pon.y-poff.y (dv)
+  1142                                  
+  1143 00000893 F7EA                    			imul	dx
+  1144 00000895 F7FB                    			idiv	bx
+  1145                                  
+  1146 00000897 29C5                    			sub		bp,ax
+  1147 00000899 C3                      			ret
+  1148                                  	
+  1149 0000089A 80FF00                  GetSin256:	cmp		bh,0
+  1150 0000089D 740A                    			je		.s000090
+  1151 0000089F 80FF01                  .s090180:	cmp		bh,1
+  1152 000008A2 750A                    			jne		.s180270
+  1153 000008A4 30FF                    				xor		bh,bh
+  1154 000008A6 80F3FF                  				xor		bl,255
+  1155 000008A9 8A87[5413]              .s000090		mov		al,[sintab+bx]
+  1156 000008AD C3                      				ret
+  1157 000008AE 80FF02                  .s180270:	cmp		bh,2
+  1158 000008B1 7509                    			jne		.s270000
+  1159 000008B3 30FF                    				xor		bh,bh
+  1160 000008B5 8A87[5413]              				mov		al,[sintab+bx]
+  1161 000008B9 F6D8                    				neg		al
+  1162 000008BB C3                      				ret
+  1163 000008BC 30FF                    .s270000:	xor		bh,bh
+  1164 000008BE 80F3FF                  			xor		bl,255
+  1165 000008C1 8A87[5413]              			mov		al,[sintab+bx]
+  1166 000008C5 F6D8                    			neg		al
+  1167 000008C7 C3                      			ret
+  1168                                  
+  1169 000008C8 89EB                    SinCos:		mov		bx,bp
+  1170 000008CA E8CDFF                  			call	GetSin256
+  1171 000008CD 98                      			cbw
+  1172 000008CE 89EB                    			mov		bx,bp
+  1173 000008D0 01C0                    			add		ax,ax
+  1174 000008D2 89C5                    			mov		bp,ax
+  1175 000008D4 FEC7                    			inc		bh
+  1176 000008D6 80E703                  			and		bh,3
+  1177 000008D9 E8BEFF                  			call	GetSin256
+  1178 000008DC 98                      			cbw
+  1179 000008DD 01C0                    			add		ax,ax
+  1180 000008DF C3                      			ret
+  1181                                  
+  1182 000008E0 8B2E[AA87]              RotationMatrix:	mov		bp,[XAngle]
+  1183 000008E4 E8E1FF                  				call	SinCos
+  1184 000008E7 892E[9487]              				mov		[SinX],bp
+  1185 000008EB A3[9687]                				mov		[CosX],ax
+  1186                                  
+  1187 000008EE 8B2E[AC87]              				mov		bp,[YAngle]
+  1188 000008F2 E8D3FF                  				call	SinCos
+  1189 000008F5 892E[9887]              				mov		[SinY],bp
+  1190 000008F9 A3[9A87]                				mov		[CosY],ax
+  1191                                  	
+  1192 000008FC 8B2E[AE87]              				mov		bp,[ZAngle]
+  1193 00000900 E8C5FF                  				call	SinCos
+  1194 00000903 892E[9C87]              				mov		[SinZ],bp
+  1195 00000907 A3[9E87]                				mov		[CosZ],ax
+  1196                                  
+  1197 0000090A C3                      				ret
+  1198                                  
+  1199                                  ; cos(x) * cos(z) 										= mz3 ?
+  1200                                  ; sin(x)												= my3 ?
+  1201                                  ; cos(x) * -sin(z)										= mx3 ?
+  1202                                   
+  1203                                  ; (cos(y) * -sin(x) * cos(z)) + (sin(y) * sin(z)),		= mz2 ?
+  1204                                  ; cos(y) * cos(x),										= my2 ?
+  1205                                  ; (cos(y) * -sin(x) * -sin(z)) + (sin(y) * cos(z))		= mx2 ?
+  1206                                  
+  1207                                  ; (-sin(y) * -sin(x) * cos(z)) + (cos(y) * sin(z))		= mz1 ?
+  1208                                  ; -sin(y) * cos(x) 										= my1 ?
+  1209                                  ; (-sin(y) * -sin(x) * -sin(z)) + (cos(y) * cos(z)) 	= mx1 ?
+  1210                                  
+  1211                                  
+  1212                                  ; mx1= (sin(gam)*sin(bet)*sin(alp)) + (cos(gam)*cos(alp))
+  1213                                  ; my1= (-cos(bet))*sin(alp)
+  1214                                  ; mz1= (sin(gam)*cos(alp)) - (cos(gam)*sin(bet)*sin(alp))
+  1215                                  
+  1216                                  ; mx2= (cos(gam)*sin(alp)) - (sin(gam)*sin(bet)*cos(alp))
+  1217                                  ; my2= (cos(bet)*cos(alp))
+  1218                                  ; mz2= ((-cos(gam))*sin(bet)*cos(alp)) - (sin(gam)*sin(alp))
+  1219                                  
+  1220                                  ; mx3 = cos(bet)*sin(gam)
+  1221                                  ; my3 = sin(bet)
+  1222                                  ; mz3 = cos(gam)*cos(bet)
+  1223                                  
+  1224                                  ; x"'=x*mx1 + y*my1 + z*mz1
+  1225                                  ; y"'=x*mx2 + y*my2 + z*mz2
+  1226                                  ; z"'=x*mx3 + y*my3 + z*mz3.
+  1227                                  
+  1228                                  ; alp=X
+  1229                                  ; bet=Y
+  1230                                  ; gam=Z
+  1231                                  
+  1232                                  ; mx1= (SinZ*SinY*SinX) + (CosZ*CosX)
+  1233                                  ; #1 = SinZ * SinY
+  1234                                  ; #2 = #1 * SinX
+  1235                                  ; #3 = CosZ * CosX
+  1236                                  ; #4 = #2 + #3
+  1237                                  
+  1238                                  ; my1= (-CosY)*SinX
+  1239                                  ; #1 = -CosY
+  1240                                  ; #2 = #1 * SinX
+  1241                                  
+  1242                                  ; mz1= (SinZ*CosX) - (CosZ*SinY*SinX)
+  1243                                  ; #1 = SinZ * CosX
+  1244                                  ; #2 = CosZ * SinY
+  1245                                  ; #3 = #2 * SinX
+  1246                                  ; #4 = #1 - #3
+  1247                                  
+  1248                                  ; mx2= (CosZ*SinX) - (SinZ*SinY*CosX)
+  1249                                  ; #1 = CosZ * SinX
+  1250                                  ; #2 = SinZ * SinY
+  1251                                  ; #3 = #2 * CosX
+  1252                                  ; #4 = #1 - #2
+  1253                                  
+  1254                                  ; my2= (CosY*CosX)
+  1255                                  ; #1 = CosY * CosX
+  1256                                  
+  1257                                  ; mz2= ((-CosZ)*SinY*CosX) - (SinZ*SinX)
+  1258                                  ; #1 = -CosZ
+  1259                                  ; #2 = #1 * SinY
+  1260                                  ; #3 = #2 * CosX
+  1261                                  ; #4 = Sinz * SinX
+  1262                                  ; #5 = #3 - #4
+  1263                                  
+  1264                                  ; mx3 = CosY*SinZ
+  1265                                  ; #1 = CosY * SinZ
+  1266                                  
+  1267                                  ; my3 = SinY
+  1268                                  ; #1 = SinY
+  1269                                  
+  1270                                  ; mz3 = CosZ*CosY
+  1271                                  ; #1 = CosZ * CosY
+  1272                                  
+  1273 0000090B 8B2E[AA87]              BuildRotateMatrix:	mov		bp,[XAngle]
+  1274 0000090F E8B6FF                  					call	SinCos
+  1275 00000912 892E[9487]              					mov		[SinX],bp
+  1276 00000916 A3[9687]                					mov		[CosX],ax
+  1277                                  
+  1278 00000919 8B2E[AC87]              					mov		bp,[YAngle]
+  1279 0000091D E8A8FF                  					call	SinCos
+  1280 00000920 892E[9887]              					mov		[SinY],bp
+  1281 00000924 A3[9A87]                					mov		[CosY],ax
+  1282                                  	
+  1283 00000927 8B2E[AE87]              					mov		bp,[ZAngle]
+  1284 0000092B E89AFF                  					call	SinCos
+  1285 0000092E 892E[9C87]              					mov		[SinZ],bp
+  1286 00000932 A3[9E87]                					mov		[CosZ],ax
+  1287 00000935 C3                      					ret
+  1288                                  	
+  1289                                  Rotate:
+  1290 00000936 06                      	push es
+  1291                                  ;rotate around x-axis:
+  1292                                  ;	y'' = y'*cos(C) + z'*sin(C)
+  1293                                  ;	z'' = y'*sin(C) - z'*cos(C)
+  1294                                  	
+  1295                                  RotateX:
+  1296 00000937 8EC0                    	mov	es,ax	; y
+  1297 00000939 F72E[9687]              	imul	word [CosX] ; y*cos(x)
+  1298 0000093D 88E3                    	mov	bl,ah
+  1299 0000093F 88D7                    	mov	bh,dl
+  1300                                  
+  1301 00000941 89E8                    	mov	ax,bp	; z
+  1302 00000943 F72E[9487]              	imul	word [SinX]	; z*sin(x)
+  1303 00000947 88E0                    	mov	al,ah
+  1304 00000949 88D4                    	mov	ah,dl
+  1305 0000094B 01C3                    	add		bx,ax
+  1306                                  
+  1307 0000094D 8CC0                    	mov	ax,es	; y
+  1308 0000094F 8EC3                    	mov	es,bx
+  1309 00000951 F72E[9487]              	imul	word [SinX]	 ; y*sin(x)
+  1310 00000955 88E3                    	mov	bl,ah
+  1311 00000957 88D7                    	mov	bh,dl
+  1312                                  
+  1313 00000959 89E8                    	mov	ax,bp	; z
+  1314 0000095B F72E[9687]              	imul	word [CosX]	; z*cos(x)
+  1315 0000095F 88E0                    	mov	al,ah
+  1316 00000961 88D4                    	mov	ah,dl
+  1317                                  
+  1318 00000963 29C3                    	sub	bx,ax
+  1319 00000965 89DD                    	mov	bp,bx
+  1320                                  
+  1321                                  ; rotate around y-axis:
+  1322                                  ;	x'' = x'*cos(B) + z*sin(B)
+  1323                                  ;	z'  = x'*sin(B) - z*cos(B)
+  1324                                  
+  1325                                  RotateY:
+  1326 00000967 89C8                    	mov	ax,cx	; x
+  1327 00000969 F72E[9A87]              	imul	word [CosY]	 ; x*cos(y)
+  1328 0000096D 88E3                    	mov	bl,ah
+  1329 0000096F 88D7                    	mov	bh,dl
+  1330                                  
+  1331 00000971 89E8                    	mov	ax,bp	; z
+  1332 00000973 F72E[9887]              	imul	word [SinY]	; z*sin(y)
+  1333 00000977 88E0                    	mov	al,ah
+  1334 00000979 88D4                    	mov	ah,dl
+  1335 0000097B 01C3                    	add	bx,ax
+  1336                                  
+  1337 0000097D 89C8                    	mov	ax,cx	; x
+  1338 0000097F 89D9                    	mov	cx,bx
+  1339 00000981 F72E[9887]              	imul	word [SinY]	; x*sin(y)
+  1340 00000985 88E3                    	mov	bl,ah
+  1341 00000987 88D7                    	mov	bh,dl
+  1342                                  
+  1343 00000989 89E8                    	mov	ax,bp	; z
+  1344 0000098B F72E[9A87]              	imul	word [CosY]	; z*cos(y)
+  1345 0000098F 88E0                    	mov	al,ah
+  1346 00000991 88D4                    	mov	ah,dl
+  1347                                  
+  1348 00000993 29C3                    	sub	bx,ax
+  1349 00000995 89DD                    	mov	bp,bx
+  1350                                  
+  1351                                  ;rotate around z-axis:
+  1352                                  ;	x'  = x*cos(A) + y*sin(A)
+  1353                                  ;	y'  = x*sin(A) - y*cos(A)
+  1354                                  
+  1355                                  RotateZ:
+  1356 00000997 89C8                    	mov	ax,cx	; x
+  1357 00000999 F72E[9E87]              	imul	word [CosZ] 	; x*cos(z)
+  1358 0000099D 88E3                    	mov	bl,ah
+  1359 0000099F 88D7                    	mov	bh,dl
+  1360                                  
+  1361 000009A1 8CC0                    	mov	ax,es	; y
+  1362 000009A3 F72E[9C87]              	imul	word [SinZ]; y*sin(z)
+  1363 000009A7 88E0                    	mov	al,ah
+  1364 000009A9 88D4                    	mov	ah,dl
+  1365 000009AB 01C3                    	add		bx,ax
+  1366                                  
+  1367 000009AD 89C8                    	mov	ax,cx 	; x
+  1368 000009AF F72E[9C87]              	imul 	word [SinZ]	; x*sin(z)
+  1369 000009B3 88E1                    	mov	cl,ah
+  1370 000009B5 88D5                    	mov	ch,dl
+  1371                                  
+  1372 000009B7 8CC0                    	mov	ax,es	; y
+  1373 000009B9 F72E[9E87]              	imul	word [CosZ]	; y*cos(z)
+  1374 000009BD 88E0                    	mov	al,ah
+  1375 000009BF 88D4                    	mov	ah,dl
+  1376                                  
+  1377 000009C1 29C1                    	sub	cx,ax
+  1378                                  
+  1379                                  
+  1380 000009C3 07                      	pop es
+  1381                                  
+  1382 000009C4 C3                      	ret
+  1383                                  
+  1384 000009C5 30D2                    ClassifyPoint:	xor		dl,dl	; in = ax/bp	; out = dl	; clear clipcodes
+  1385                                  
+  1386 000009C7 83FD00                  				cmp		bp,TOP_EDGE
+  1387 000009CA 7D04                    				jge		.right_test
+  1388 000009CC B201                    					mov		dl,TOP_CC
+  1389 000009CE EB08                    					jmp		.hor_test_end
+  1390                                  
+  1391 000009D0 81FDC700                .right_test:	cmp		bp,BOTTOM_EDGE
+  1392 000009D4 7E02                    				jle		.hor_test_end
+  1393 000009D6 B202                    					mov		dl,BOTTOM_CC
+  1394                                  
+  1395 000009D8 83F800                  .hor_test_end:	cmp		ax,LEFT_EDGE
+  1396 000009DB 7D04                    				jge		.bottom_test
+  1397 000009DD 80CA04                  					or		dl,LEFT_CC
+  1398 000009E0 C3                      					ret
+  1399 000009E1 3D3F01                  .bottom_test:	cmp		ax,RIGHT_EDGE
+  1400 000009E4 7E03                    				jle		.ver_test_end
+  1401 000009E6 80CA08                  					or		dl,RIGHT_CC 			
+  1402 000009E9 C3                      .ver_test_end:	ret
+  1403                                  
+  1404 000009EA FEC5                    Perspective:	inc		ch	; in - bp = z / ax = x  dx = y	; z +256
+  1405                                  		
+  1406 000009EC 99                      				cwd
+  1407 000009ED 88E2                    				mov		dl,ah
+  1408 000009EF 88C4                    				mov		ah,al		; dx:ax = ypos *256 = ypos *256	
+  1409 000009F1 F7F9                    				idiv	cx 		; ax = dx:ax = ypos*256 / zpos+256
+  1410 000009F3 83C064                  				add		ax,MIDDLE_Y	; ypos
+  1411                                  	
+  1412 000009F6 95                      				xchg	ax,bp
+  1413                                  
+  1414 000009F7 99                      				cwd
+  1415 000009F8 88E2                    				mov		dl,ah
+  1416 000009FA 88C4                    				mov		ah,al		; dx:ax = xpos *256 = xpos *256
+  1417 000009FC F7F9                    				idiv	cx 		; ax = dx:ax = xpos*256 / zpos+256
+  1418 000009FE 05A000                  				add		ax,MIDDLE_X	; xpos
+  1419                                  	
+  1420 00000A01 C3                      				ret			; output bl=clip codes / ax=xpos / bp=ypos
+  1421                                  	
+  1422 00000A02 89FE                    HexChar:	mov		si,di
+  1423 00000A04 88C3                    			mov		bl,al
+  1424 00000A06 D0EB                    			shr		bl,1
+  1425 00000A08 D0EB                    			shr		bl,1
+  1426 00000A0A D0EB                    			shr		bl,1
+  1427 00000A0C D0EB                    			shr		bl,1
+  1428 00000A0E 83E30F                  			and		bx,15
+  1429 00000A11 8AA7[800C]              			mov		ah,[Hex0+bx]
+  1430 00000A15 268825                  			mov		[es:di],ah
+  1431 00000A18 81C70020                			add		di,8192
+  1432 00000A1C 8AA7[900C]              			mov		ah,[Hex1+bx]
+  1433 00000A20 268825                  			mov		[es:di],ah
+  1434 00000A23 81EFB01F                			sub		di,8192-80
+  1435 00000A27 8AA7[A00C]              			mov		ah,[Hex2+bx]
+  1436 00000A2B 268825                  			mov		[es:di],ah
+  1437 00000A2E 81C70020                			add		di,8192
+  1438 00000A32 8AA7[B00C]              			mov		ah,[Hex3+bx]
+  1439 00000A36 268825                  			mov		[es:di],ah
+  1440 00000A39 81EFB01F                			sub		di,8192-80
+  1441 00000A3D 8AA7[C00C]              			mov		ah,[Hex4+bx]
+  1442 00000A41 268825                  			mov		[es:di],ah
+  1443                                  
+  1444 00000A44 89F7                    			mov		di,si
+  1445 00000A46 47                      			inc		di
+  1446                                  
+  1447 00000A47 88C3                    			mov		bl,al
+  1448 00000A49 80E30F                  			and		bl,15
+  1449 00000A4C 8A87[800C]              			mov		al,[Hex0+bx]
+  1450 00000A50 268805                  			mov		[es:di],al
+  1451 00000A53 81C70020                			add		di,8192
+  1452 00000A57 8A87[900C]              			mov		al,[Hex1+bx]
+  1453 00000A5B 268805                  			mov		[es:di],al
+  1454 00000A5E 81EFB01F                			sub		di,8192-80
+  1455 00000A62 8A87[A00C]              			mov		al,[Hex2+bx]
+  1456 00000A66 268805                  			mov		[es:di],al
+  1457 00000A69 81C70020                			add		di,8192
+  1458 00000A6D 8A87[B00C]              			mov		al,[Hex3+bx]
+  1459 00000A71 268805                  			mov		[es:di],al
+  1460 00000A74 81EFB01F                			sub		di,8192-80
+  1461 00000A78 8A87[C00C]              			mov		al,[Hex4+bx]
+  1462 00000A7C 268805                  			mov		[es:di],al
+  1463 00000A7F C3                      			ret
+  1464                                  
+  1465 00000A80 50                      Hex24:		push	ax
+  1466 00000A81 53                      			push	bx
+  1467                                  
+  1468 00000A82 88F8                    			mov		al,bh
+  1469 00000A84 E82100                  			call	Hex8
+  1470                                  						
+  1471 00000A87 5B                      			pop		bx
+  1472 00000A88 58                      			pop		ax
+  1473                                  
+  1474 00000A89 50                      			push	ax
+  1475 00000A8A 53                      			push	bx
+  1476                                  
+  1477 00000A8B BF0200                  			mov		di,2
+  1478 00000A8E E81900                  			call	HexByte
+  1479                                  
+  1480 00000A91 5B                      			pop		bx
+  1481 00000A92 58                      			pop		ax
+  1482                                  
+  1483 00000A93 88E0                    			mov		al,ah
+  1484 00000A95 BF0400                  			mov		di,4
+  1485 00000A98 EB10                    			jmp		HexByte	; does ret
+  1486                                  
+  1487 00000A9A 50                      Hex16:		push	ax
+  1488 00000A9B 53                      			push	bx
+  1489                                  
+  1490 00000A9C 88E0                    			mov		al,ah
+  1491 00000A9E E80700                  			call	Hex8
+  1492                                  						
+  1493 00000AA1 5B                      			pop		bx
+  1494 00000AA2 58                      			pop		ax
+  1495                                  
+  1496 00000AA3 BF0200                  			mov		di,2
+  1497 00000AA6 EB02                    			jmp		HexByte ; does ret
+  1498                                  
+  1499 00000AA8 31FF                    Hex8:		xor		di,di
+  1500 00000AAA 30FF                    HexByte:	xor		bh,bh
+  1501 00000AAC 88DC                    			mov		ah,bl
+  1502 00000AAE 00E4                    			add		ah,ah	; *2
+  1503 00000AB0 00E3                    			add		bl,ah	; *3
+  1504 00000AB2 01DB                    			add		bx,bx	; *6
+  1505 00000AB4 01DB                    			add		bx,bx	; *12
+  1506 00000AB6 03BF[0000]              			add		di,[BackBufferTable+bx]	; lookup start ver
+  1507 00000ABA E945FF                  			jmp		HexChar	 ; does ret
+  1508                                  ;			ret
+  1509                                  
+  1510                                  
+  1511                                  
+  1512                                  ; in = bl=z/bh=v/dx=h/dh=hsign - out = bl=v/ax=h ???? possible
+  1513                                  
+  1514                                  Perspective8before: ; in = si=z/bl=v/bh=h/?=hsign - out = bl=v/ax=h
+  1515                                  
+  1516 00000ABD 8A84[4E0E]              	mov		al,[persvtab8+si]
+  1517                                  
+  1518                                  ; mov [Test0],si	
+  1519                                  ; mov ah,0
+  1520                                  ; mov [Test1],ax
+  1521                                  
+  1522 00000AC1 F6E3                    	MUL		bl
+  1523 00000AC3 88E3                    	mov		bl,ah
+  1524                                  
+  1525                                  ; mov bh,0
+  1526                                  ; mov [Test2],bx
+  1527                                  	
+  1528 00000AC5 B8A000                  	mov		ax,MIDDLE_H
+  1529 00000AC8 C3                      	ret
+  1530                                  
+  1531 00000AC9 8A84[4E0D]              	mov		al,[pershtab8+si]
+  1532 00000ACD 84FF                        test	bh,bh
+  1533 00000ACF 780A                    	js		.neg
+  1534 00000AD1 F6E7                    .pos	MUL		bh
+  1535 00000AD3 88E0                    		mov		al,ah
+  1536 00000AD5 B400                    		mov		ah,0
+  1537 00000AD7 05A000                  		add		ax,MIDDLE_H
+  1538 00000ADA C3                      		ret
+  1539 00000ADB F6DF                    .neg	neg		bh
+  1540 00000ADD F6E7                    		MUL		bh
+  1541 00000ADF 88E0                    		mov		al,ah
+  1542 00000AE1 B400                    		mov		ah,0
+  1543 00000AE3 BEA000                  		mov		si,MIDDLE_H
+  1544 00000AE6 29F0                    		sub		ax,si ; middle h - answer
+  1545 00000AE8 C3                      		ret
+  1546                                  
+  1547                                  ; hor = -256 +256
+  1548                                  ; ver = -256 +256
+  1549                                  ; z = -256 +256
+  1550                                  ; shift right = lsr bx
+  1551                                  
+  1552                                  Perspective8Test: ; in = bx=z (-256+256) ax=v (-256+256) dx=h/dh=hsign - out = bl=v/dx=h
+  1553                                  
+  1554 00000AE9 30FF                    	xor		bh,bh
+  1555 00000AEB 8A87[4E0E]              	mov		al,[persvtab8+bx]
+  1556 00000AEF F6E4                    	MUL		ah
+  1557                                  	
+  1558 00000AF1 8A87[4E0D]              	mov		al,[pershtab8+bx]
+  1559 00000AF5 88E3                    	mov		bl,ah
+  1560 00000AF7 84F6                        test	dh,dh
+  1561 00000AF9 740F                    	jz		.pos
+  1562 00000AFB F6DA                    .neg	neg		dl
+  1563 00000AFD F6E2                    		MUL		dl
+  1564 00000AFF 88E2                    		mov		dl,ah
+  1565 00000B01 30F6                    		xor		dh,dh
+  1566 00000B03 F7DA                    		neg		dx
+  1567 00000B05 81C2A000                		add		dx,MIDDLE_H
+  1568 00000B09 C3                      		ret
+  1569 00000B0A F6E2                    .pos	MUL		dl
+  1570 00000B0C 88E2                    		mov		dl,ah
+  1571 00000B0E 30F6                    		xor		dh,dh
+  1572 00000B10 81C2A000                		add		dx,MIDDLE_H
+  1573 00000B14 C3                      		ret
+  1574                                  
+  1575                                  Perspective16: ; in = bx=z/cx=v/bp=h/dh=hsign - out = bl=v/dx=h
+  1576                                  
+  1577                                  ; mov [Test0],bx
+  1578                                  
+  1579 00000B15 D1EB                    	shr		bx,1
+  1580                                  ; mov [Test1],bx
+  1581 00000B17 8A87[4E0E]              	mov		al,[persvtab8+bx]
+  1582 00000B1B D1E9                    	shr		cx,1
+  1583 00000B1D F6E1                    	MUL		cl
+  1584                                  
+  1585 00000B1F 8A87[4E0D]              	mov		al,[pershtab8+bx]
+  1586 00000B23 88E3                    	mov		bl,ah
+  1587                                  
+  1588 00000B25 01ED                    	add bp,bp
+  1589 00000B27 8B96[4E0F]              	mov dx,[pershtab256+bp]
+  1590 00000B2B 84F6                    	test dh,dh ;     test	dh,dh
+  1591 00000B2D 740F                    	jz		.pos
+  1592 00000B2F F6DA                    .neg	neg		dl
+  1593 00000B31 F6E2                    		MUL		dl
+  1594 00000B33 88E2                    		mov		dl,ah
+  1595 00000B35 30F6                    		xor		dh,dh
+  1596 00000B37 F7DA                    		neg		dx
+  1597 00000B39 81C2A000                		add		dx,MIDDLE_H
+  1598 00000B3D C3                      		ret
+  1599 00000B3E F6E2                    .pos	MUL		dl
+  1600 00000B40 88E2                    		mov		dl,ah
+  1601 00000B42 30F6                    		xor		dh,dh
+  1602 00000B44 81C2A000                		add		dx,MIDDLE_H
+  1603 00000B48 C3                      		ret
+  1604                                  
+  1605                                  Perspective16bk: ; in = bx=z/cx=v/dx=h/dh=hsign - out = bl=v/dx=h
+  1606                                  
+  1607                                  ; mov [Test0],bx
+  1608                                  
+  1609 00000B49 D1EB                    	shr		bx,1
+  1610                                  ; mov [Test1],bx
+  1611 00000B4B 8A87[4E0E]              	mov		al,[persvtab8+bx]
+  1612 00000B4F D0D3                        rcl bl,1
+  1613 00000B51 D1E9                    	shr		cx,1
+  1614 00000B53 F6E1                    	MUL		cl
+  1615                                  
+  1616                                  ;    rcl bl,1
+  1617                                  ;	xor bh,bh
+  1618 00000B55 8A87[4E0D]              	mov		al,[pershtab8+bx]
+  1619 00000B59 88E3                    	mov		bl,ah
+  1620 00000B5B 84F6                        test	dh,dh
+  1621 00000B5D 740F                    	jz		.pos
+  1622                                  ;	dec	dh
+  1623                                  ;	jns		.pos
+  1624 00000B5F F6DA                    .neg	neg		dl
+  1625 00000B61 F6E2                    		MUL		dl
+  1626 00000B63 88E2                    		mov		dl,ah
+  1627 00000B65 30F6                    		xor		dh,dh
+  1628 00000B67 F7DA                    		neg		dx
+  1629 00000B69 81C2A000                		add		dx,MIDDLE_H
+  1630 00000B6D C3                      		ret
+  1631 00000B6E F6E2                    .pos	MUL		dl
+  1632 00000B70 88E2                    		mov		dl,ah
+  1633 00000B72 30F6                    		xor		dh,dh
+  1634 00000B74 81C2A000                		add		dx,MIDDLE_H
+  1635 00000B78 C3                      		ret
+  1636                                  
+  1637                                  MIDDLE_H EQU MIDDLE_X
+  1638                                  
+  1639                                  	
+  1640                                  section .data align=8 ; 16 ; 8 ; 16
+  1641                                  
+  1642                                  
+  1643                                  OrTable:	
+  1644 00000000 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1644 00000009 0030000C000300C000-
+  1644 00000012 30000C000300C00030-
+  1644 0000001B 000C000300C0003000-
+  1644 00000024 0C000300C00030000C-
+  1644 0000002D 000300C00030000C00-
+  1644 00000036 0300C00030000C0003-
+  1644 0000003F 00                 
+  1645 00000040 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1645 00000049 0030000C000300C000-
+  1645 00000052 30000C000300C00030-
+  1645 0000005B 000C000300C0003000-
+  1645 00000064 0C000300C00030000C-
+  1645 0000006D 000300C00030000C00-
+  1645 00000076 0300C00030000C0003-
+  1645 0000007F 00                 
+  1646 00000080 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1646 00000089 0030000C000300C000-
+  1646 00000092 30000C000300C00030-
+  1646 0000009B 000C000300C0003000-
+  1646 000000A4 0C000300C00030000C-
+  1646 000000AD 000300C00030000C00-
+  1646 000000B6 0300C00030000C0003-
+  1646 000000BF 00                 
+  1647 000000C0 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1647 000000C9 0030000C000300C000-
+  1647 000000D2 30000C000300C00030-
+  1647 000000DB 000C000300C0003000-
+  1647 000000E4 0C000300C00030000C-
+  1647 000000ED 000300C00030000C00-
+  1647 000000F6 0300C00030000C0003-
+  1647 000000FF 00                 
+  1648 00000100 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1648 00000109 0030000C000300C000-
+  1648 00000112 30000C000300C00030-
+  1648 0000011B 000C000300C0003000-
+  1648 00000124 0C000300C00030000C-
+  1648 0000012D 000300C00030000C00-
+  1648 00000136 0300C00030000C0003-
+  1648 0000013F 00                 
+  1649 00000140 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1649 00000149 0030000C000300C000-
+  1649 00000152 30000C000300C00030-
+  1649 0000015B 000C000300C0003000-
+  1649 00000164 0C000300C00030000C-
+  1649 0000016D 000300C00030000C00-
+  1649 00000176 0300C00030000C0003-
+  1649 0000017F 00                 
+  1650 00000180 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1650 00000189 0030000C000300C000-
+  1650 00000192 30000C000300C00030-
+  1650 0000019B 000C000300C0003000-
+  1650 000001A4 0C000300C00030000C-
+  1650 000001AD 000300C00030000C00-
+  1650 000001B6 0300C00030000C0003-
+  1650 000001BF 00                 
+  1651 000001C0 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1651 000001C9 0030000C000300C000-
+  1651 000001D2 30000C000300C00030-
+  1651 000001DB 000C000300C0003000-
+  1651 000001E4 0C000300C00030000C-
+  1651 000001ED 000300C00030000C00-
+  1651 000001F6 0300C00030000C0003-
+  1651 000001FF 00                 
+  1652 00000200 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1652 00000209 0030000C000300C000-
+  1652 00000212 30000C000300C00030-
+  1652 0000021B 000C000300C0003000-
+  1652 00000224 0C000300C00030000C-
+  1652 0000022D 000300C00030000C00-
+  1652 00000236 0300C00030000C0003-
+  1652 0000023F 00                 
+  1653 00000240 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1653 00000249 0030000C000300C000-
+  1653 00000252 30000C000300C00030-
+  1653 0000025B 000C000300C0003000-
+  1653 00000264 0C000300C00030000C-
+  1653 0000026D 000300C00030000C00-
+  1653 00000276 0300C00030000C0003-
+  1653 0000027F 00                 
+  1654 00000280 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1654 00000289 0030000C000300C000-
+  1654 00000292 30000C000300C00030-
+  1654 0000029B 000C000300C0003000-
+  1654 000002A4 0C000300C00030000C-
+  1654 000002AD 000300C00030000C00-
+  1654 000002B6 0300C00030000C0003-
+  1654 000002BF 00                 
+  1655 000002C0 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1655 000002C9 0030000C000300C000-
+  1655 000002D2 30000C000300C00030-
+  1655 000002DB 000C000300C0003000-
+  1655 000002E4 0C000300C00030000C-
+  1655 000002ED 000300C00030000C00-
+  1655 000002F6 0300C00030000C0003-
+  1655 000002FF 00                 
+  1656 00000300 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1656 00000309 0030000C000300C000-
+  1656 00000312 30000C000300C00030-
+  1656 0000031B 000C000300C0003000-
+  1656 00000324 0C000300C00030000C-
+  1656 0000032D 000300C00030000C00-
+  1656 00000336 0300C00030000C0003-
+  1656 0000033F 00                 
+  1657 00000340 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1657 00000349 0030000C000300C000-
+  1657 00000352 30000C000300C00030-
+  1657 0000035B 000C000300C0003000-
+  1657 00000364 0C000300C00030000C-
+  1657 0000036D 000300C00030000C00-
+  1657 00000376 0300C00030000C0003-
+  1657 0000037F 00                 
+  1658 00000380 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1658 00000389 0030000C000300C000-
+  1658 00000392 30000C000300C00030-
+  1658 0000039B 000C000300C0003000-
+  1658 000003A4 0C000300C00030000C-
+  1658 000003AD 000300C00030000C00-
+  1658 000003B6 0300C00030000C0003-
+  1658 000003BF 00                 
+  1659 000003C0 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1659 000003C9 0030000C000300C000-
+  1659 000003D2 30000C000300C00030-
+  1659 000003DB 000C000300C0003000-
+  1659 000003E4 0C000300C00030000C-
+  1659 000003ED 000300C00030000C00-
+  1659 000003F6 0300C00030000C0003-
+  1659 000003FF 00                 
+  1660 00000400 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1660 00000409 0030000C000300C000-
+  1660 00000412 30000C000300C00030-
+  1660 0000041B 000C000300C0003000-
+  1660 00000424 0C000300C00030000C-
+  1660 0000042D 000300C00030000C00-
+  1660 00000436 0300C00030000C0003-
+  1660 0000043F 00                 
+  1661 00000440 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1661 00000449 0030000C000300C000-
+  1661 00000452 30000C000300C00030-
+  1661 0000045B 000C000300C0003000-
+  1661 00000464 0C000300C00030000C-
+  1661 0000046D 000300C00030000C00-
+  1661 00000476 0300C00030000C0003-
+  1661 0000047F 00                 
+  1662 00000480 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1662 00000489 0030000C000300C000-
+  1662 00000492 30000C000300C00030-
+  1662 0000049B 000C000300C0003000-
+  1662 000004A4 0C000300C00030000C-
+  1662 000004AD 000300C00030000C00-
+  1662 000004B6 0300C00030000C0003-
+  1662 000004BF 00                 
+  1663 000004C0 C00030000C000300C0-     	dw	192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3,192,48,12,3
+  1663 000004C9 0030000C000300C000-
+  1663 000004D2 30000C000300C00030-
+  1663 000004DB 000C000300C0003000-
+  1663 000004E4 0C000300C00030000C-
+  1663 000004ED 000300C00030000C00-
+  1663 000004F6 0300C00030000C0003-
+  1663 000004FF 00                 
+  1664                                  
+  1665                                  AndTable:	
+  1666 00000500 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1666 00000509 00CF00F300FC003F00-
+  1666 00000512 CF00F300FC003F00CF-
+  1666 0000051B 00F300FC003F00CF00-
+  1666 00000524 F300FC003F00CF00F3-
+  1666 0000052D 00FC003F00CF00F300-
+  1666 00000536 FC003F00CF00F300FC-
+  1666 0000053F 00                 
+  1667 00000540 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1667 00000549 00CF00F300FC003F00-
+  1667 00000552 CF00F300FC003F00CF-
+  1667 0000055B 00F300FC003F00CF00-
+  1667 00000564 F300FC003F00CF00F3-
+  1667 0000056D 00FC003F00CF00F300-
+  1667 00000576 FC003F00CF00F300FC-
+  1667 0000057F 00                 
+  1668 00000580 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1668 00000589 00CF00F300FC003F00-
+  1668 00000592 CF00F300FC003F00CF-
+  1668 0000059B 00F300FC003F00CF00-
+  1668 000005A4 F300FC003F00CF00F3-
+  1668 000005AD 00FC003F00CF00F300-
+  1668 000005B6 FC003F00CF00F300FC-
+  1668 000005BF 00                 
+  1669 000005C0 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1669 000005C9 00CF00F300FC003F00-
+  1669 000005D2 CF00F300FC003F00CF-
+  1669 000005DB 00F300FC003F00CF00-
+  1669 000005E4 F300FC003F00CF00F3-
+  1669 000005ED 00FC003F00CF00F300-
+  1669 000005F6 FC003F00CF00F300FC-
+  1669 000005FF 00                 
+  1670 00000600 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1670 00000609 00CF00F300FC003F00-
+  1670 00000612 CF00F300FC003F00CF-
+  1670 0000061B 00F300FC003F00CF00-
+  1670 00000624 F300FC003F00CF00F3-
+  1670 0000062D 00FC003F00CF00F300-
+  1670 00000636 FC003F00CF00F300FC-
+  1670 0000063F 00                 
+  1671 00000640 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1671 00000649 00CF00F300FC003F00-
+  1671 00000652 CF00F300FC003F00CF-
+  1671 0000065B 00F300FC003F00CF00-
+  1671 00000664 F300FC003F00CF00F3-
+  1671 0000066D 00FC003F00CF00F300-
+  1671 00000676 FC003F00CF00F300FC-
+  1671 0000067F 00                 
+  1672 00000680 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1672 00000689 00CF00F300FC003F00-
+  1672 00000692 CF00F300FC003F00CF-
+  1672 0000069B 00F300FC003F00CF00-
+  1672 000006A4 F300FC003F00CF00F3-
+  1672 000006AD 00FC003F00CF00F300-
+  1672 000006B6 FC003F00CF00F300FC-
+  1672 000006BF 00                 
+  1673 000006C0 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1673 000006C9 00CF00F300FC003F00-
+  1673 000006D2 CF00F300FC003F00CF-
+  1673 000006DB 00F300FC003F00CF00-
+  1673 000006E4 F300FC003F00CF00F3-
+  1673 000006ED 00FC003F00CF00F300-
+  1673 000006F6 FC003F00CF00F300FC-
+  1673 000006FF 00                 
+  1674 00000700 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1674 00000709 00CF00F300FC003F00-
+  1674 00000712 CF00F300FC003F00CF-
+  1674 0000071B 00F300FC003F00CF00-
+  1674 00000724 F300FC003F00CF00F3-
+  1674 0000072D 00FC003F00CF00F300-
+  1674 00000736 FC003F00CF00F300FC-
+  1674 0000073F 00                 
+  1675 00000740 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1675 00000749 00CF00F300FC003F00-
+  1675 00000752 CF00F300FC003F00CF-
+  1675 0000075B 00F300FC003F00CF00-
+  1675 00000764 F300FC003F00CF00F3-
+  1675 0000076D 00FC003F00CF00F300-
+  1675 00000776 FC003F00CF00F300FC-
+  1675 0000077F 00                 
+  1676 00000780 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1676 00000789 00CF00F300FC003F00-
+  1676 00000792 CF00F300FC003F00CF-
+  1676 0000079B 00F300FC003F00CF00-
+  1676 000007A4 F300FC003F00CF00F3-
+  1676 000007AD 00FC003F00CF00F300-
+  1676 000007B6 FC003F00CF00F300FC-
+  1676 000007BF 00                 
+  1677 000007C0 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1677 000007C9 00CF00F300FC003F00-
+  1677 000007D2 CF00F300FC003F00CF-
+  1677 000007DB 00F300FC003F00CF00-
+  1677 000007E4 F300FC003F00CF00F3-
+  1677 000007ED 00FC003F00CF00F300-
+  1677 000007F6 FC003F00CF00F300FC-
+  1677 000007FF 00                 
+  1678 00000800 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1678 00000809 00CF00F300FC003F00-
+  1678 00000812 CF00F300FC003F00CF-
+  1678 0000081B 00F300FC003F00CF00-
+  1678 00000824 F300FC003F00CF00F3-
+  1678 0000082D 00FC003F00CF00F300-
+  1678 00000836 FC003F00CF00F300FC-
+  1678 0000083F 00                 
+  1679 00000840 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1679 00000849 00CF00F300FC003F00-
+  1679 00000852 CF00F300FC003F00CF-
+  1679 0000085B 00F300FC003F00CF00-
+  1679 00000864 F300FC003F00CF00F3-
+  1679 0000086D 00FC003F00CF00F300-
+  1679 00000876 FC003F00CF00F300FC-
+  1679 0000087F 00                 
+  1680 00000880 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1680 00000889 00CF00F300FC003F00-
+  1680 00000892 CF00F300FC003F00CF-
+  1680 0000089B 00F300FC003F00CF00-
+  1680 000008A4 F300FC003F00CF00F3-
+  1680 000008AD 00FC003F00CF00F300-
+  1680 000008B6 FC003F00CF00F300FC-
+  1680 000008BF 00                 
+  1681 000008C0 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1681 000008C9 00CF00F300FC003F00-
+  1681 000008D2 CF00F300FC003F00CF-
+  1681 000008DB 00F300FC003F00CF00-
+  1681 000008E4 F300FC003F00CF00F3-
+  1681 000008ED 00FC003F00CF00F300-
+  1681 000008F6 FC003F00CF00F300FC-
+  1681 000008FF 00                 
+  1682 00000900 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1682 00000909 00CF00F300FC003F00-
+  1682 00000912 CF00F300FC003F00CF-
+  1682 0000091B 00F300FC003F00CF00-
+  1682 00000924 F300FC003F00CF00F3-
+  1682 0000092D 00FC003F00CF00F300-
+  1682 00000936 FC003F00CF00F300FC-
+  1682 0000093F 00                 
+  1683 00000940 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1683 00000949 00CF00F300FC003F00-
+  1683 00000952 CF00F300FC003F00CF-
+  1683 0000095B 00F300FC003F00CF00-
+  1683 00000964 F300FC003F00CF00F3-
+  1683 0000096D 00FC003F00CF00F300-
+  1683 00000976 FC003F00CF00F300FC-
+  1683 0000097F 00                 
+  1684 00000980 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1684 00000989 00CF00F300FC003F00-
+  1684 00000992 CF00F300FC003F00CF-
+  1684 0000099B 00F300FC003F00CF00-
+  1684 000009A4 F300FC003F00CF00F3-
+  1684 000009AD 00FC003F00CF00F300-
+  1684 000009B6 FC003F00CF00F300FC-
+  1684 000009BF 00                 
+  1685 000009C0 3F00CF00F300FC003F-     	dw	255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3,255-192,255-48,255-12,255-3
+  1685 000009C9 00CF00F300FC003F00-
+  1685 000009D2 CF00F300FC003F00CF-
+  1685 000009DB 00F300FC003F00CF00-
+  1685 000009E4 F300FC003F00CF00F3-
+  1685 000009ED 00FC003F00CF00F300-
+  1685 000009F6 FC003F00CF00F300FC-
+  1685 000009FF 00                 
+  1686                                  	
+  1687                                  HorPosTable:
+  1688 00000A00 0000000000000000        	dw	0,0,0,0
+  1689 00000A08 0100010001000100        	dw	1,1,1,1
+  1690 00000A10 0200020002000200        	dw	2,2,2,2
+  1691 00000A18 0300030003000300        	dw	3,3,3,3
+  1692 00000A20 0400040004000400        	dw	4,4,4,4
+  1693 00000A28 0500050005000500        	dw	5,5,5,5
+  1694 00000A30 0600060006000600        	dw	6,6,6,6
+  1695 00000A38 0700070007000700        	dw	7,7,7,7
+  1696 00000A40 0800080008000800        	dw	8,8,8,8
+  1697 00000A48 0900090009000900        	dw	9,9,9,9
+  1698                                  	
+  1699 00000A50 0A000A000A000A00        	dw	10,10,10,10
+  1700 00000A58 0B000B000B000B00        	dw	11,11,11,11
+  1701 00000A60 0C000C000C000C00        	dw	12,12,12,12
+  1702 00000A68 0D000D000D000D00        	dw	13,13,13,13
+  1703 00000A70 0E000E000E000E00        	dw	14,14,14,14
+  1704 00000A78 0F000F000F000F00        	dw	15,15,15,15
+  1705 00000A80 1000100010001000        	dw	16,16,16,16
+  1706 00000A88 1100110011001100        	dw	17,17,17,17
+  1707 00000A90 1200120012001200        	dw	18,18,18,18
+  1708 00000A98 1300130013001300        	dw	19,19,19,19
+  1709                                  	
+  1710 00000AA0 1400140014001400        	dw	20,20,20,20
+  1711 00000AA8 1500150015001500        	dw	21,21,21,21
+  1712 00000AB0 1600160016001600        	dw	22,22,22,22
+  1713 00000AB8 1700170017001700        	dw	23,23,23,23
+  1714 00000AC0 1800180018001800        	dw	24,24,24,24
+  1715 00000AC8 1900190019001900        	dw	25,25,25,25
+  1716 00000AD0 1A001A001A001A00        	dw	26,26,26,26
+  1717 00000AD8 1B001B001B001B00        	dw	27,27,27,27
+  1718 00000AE0 1C001C001C001C00        	dw	28,28,28,28
+  1719 00000AE8 1D001D001D001D00        	dw	29,29,29,29
+  1720                                  	
+  1721 00000AF0 1E001E001E001E00        	dw	30,30,30,30
+  1722 00000AF8 1F001F001F001F00        	dw	31,31,31,31
+  1723 00000B00 2000200020002000        	dw	32,32,32,32
+  1724 00000B08 2100210021002100        	dw	33,33,33,33
+  1725 00000B10 2200220022002200        	dw	34,34,34,34
+  1726 00000B18 2300230023002300        	dw	35,35,35,35
+  1727 00000B20 2400240024002400        	dw	36,36,36,36
+  1728 00000B28 2500250025002500        	dw	37,37,37,37
+  1729 00000B30 2600260026002600        	dw	38,38,38,38
+  1730 00000B38 2700270027002700        	dw	39,39,39,39
+  1731                                  
+  1732 00000B40 2800280028002800        	dw	40,40,40,40
+  1733 00000B48 2900290029002900        	dw	41,41,41,41
+  1734 00000B50 2A002A002A002A00        	dw	42,42,42,42
+  1735 00000B58 2B002B002B002B00        	dw	43,43,43,43
+  1736 00000B60 2C002C002C002C00        	dw	44,44,44,44
+  1737 00000B68 2D002D002D002D00        	dw	45,45,45,45
+  1738 00000B70 2E002E002E002E00        	dw	46,46,46,46
+  1739 00000B78 2F002F002F002F00        	dw	47,47,47,47
+  1740 00000B80 3000300030003000        	dw	48,48,48,48
+  1741 00000B88 3100310031003100        	dw	49,49,49,49
+  1742                                  
+  1743 00000B90 3200320032003200        	dw	50,50,50,50
+  1744 00000B98 3300330033003300        	dw	51,51,51,51
+  1745 00000BA0 3400340034003400        	dw	52,52,52,52
+  1746 00000BA8 3500350035003500        	dw	53,53,53,53
+  1747 00000BB0 3600360036003600        	dw	54,54,54,54
+  1748 00000BB8 3700370037003700        	dw	55,55,55,55
+  1749 00000BC0 3800380038003800        	dw	56,56,56,56
+  1750 00000BC8 3900390039003900        	dw	57,57,57,57
+  1751 00000BD0 3A003A003A003A00        	dw	58,58,58,58
+  1752 00000BD8 3B003B003B003B00        	dw	59,59,59,59
+  1753                                  
+  1754 00000BE0 3C003C003C003C00        	dw	60,60,60,60
+  1755 00000BE8 3D003D003D003D00        	dw	61,61,61,61
+  1756 00000BF0 3E003E003E003E00        	dw	62,62,62,62
+  1757 00000BF8 3F003F003F003F00        	dw	63,63,63,63
+  1758 00000C00 4000400040004000        	dw	64,64,64,64
+  1759 00000C08 4100410041004100        	dw	65,65,65,65
+  1760 00000C10 4200420042004200        	dw	66,66,66,66
+  1761 00000C18 4300430043004300        	dw	67,67,67,67
+  1762 00000C20 4400440044004400        	dw	68,68,68,68
+  1763 00000C28 4500450045004500        	dw	69,69,69,69
+  1764                                  
+  1765 00000C30 4600460046004600        	dw	70,70,70,70
+  1766 00000C38 4700470047004700        	dw	71,71,71,71
+  1767 00000C40 4800480048004800        	dw	72,72,72,72
+  1768 00000C48 4900490049004900        	dw	73,73,73,73
+  1769 00000C50 4A004A004A004A00        	dw	74,74,74,74
+  1770 00000C58 4B004B004B004B00        	dw	75,75,75,75
+  1771 00000C60 4C004C004C004C00        	dw	76,76,76,76
+  1772 00000C68 4D004D004D004D00        	dw	77,77,77,77
+  1773 00000C70 4E004E004E004E00        	dw	78,78,78,78
+  1774 00000C78 4F004F004F004F00        	dw	79,79,79,79
+  1775                                  
+  1776 00000C80 FC30FCFCCCFCFCFCFC-     Hex0	db 11111100b,00110000b,11111100b,11111100b,11001100b,11111100b,11111100b,11111100b,11111100b,11111100b,11111100b,11111100b,11111100b,11110000b,11111100b,11111100b
+  1776 00000C89 FCFCFCFCF0FCFC     
+  1777 00000C90 CCF00C0CCCC0C00CCC-     Hex1	db 11001100b,11110000b,00001100b,00001100b,11001100b,11000000b,11000000b,00001100b,11001100b,11001100b,11001100b,11001100b,11000000b,11001100b,11000000b,11000000b
+  1777 00000C99 CCCCCCC0CCC0C0     
+  1778 00000CA0 CC30FCFCFCFCFC0CFC-     Hex2	db 11001100b,00110000b,11111100b,11111100b,11111100b,11111100b,11111100b,00001100b,11111100b,11111100b,11111100b,11110000b,11000000b,11001100b,11111100b,11111100b
+  1778 00000CA9 FCFCF0C0CCFCFC     
+  1779 00000CB0 CC30C00C0C0CCC0CCC-     Hex3	db 11001100b,00110000b,11000000b,00001100b,00001100b,00001100b,11001100b,00001100b,11001100b,00001100b,11001100b,11001100b,11000000b,11001100b,11000000b,11000000b
+  1779 00000CB9 0CCCCCC0CCC0C0     
+  1780 00000CC0 FCFCFCFC0CFCFC0CFC-     Hex4	db 11111100b,11111100b,11111100b,11111100b,00001100b,11111100b,11111100b,00001100b,11111100b,11111100b,11001100b,11111100b,11111100b,11110000b,11111100b,11000000b
+  1780 00000CC9 FCCCFCFCF0FCC0     
+  1781                                   
+  1782                                  ObjectPoints00:
+  1783                                  ;	dw	-10,-10,-10 		;+150
+  1784                                  ;	dw	-10,-10,+10		;+150
+  1785                                  ;	dw	-10,+10,-10		;+150
+  1786                                  ;	dw	-10,+10,+10		;+150
+  1787                                  ;	dw	+10,-10,-10 		;+150
+  1788                                  ;	dw	+10,-10,+10 		;+150
+  1789                                  ;	dw	+10,+10,-10		;+150
+  1790                                  ;	dw	+10,+10,+10		;+150
+  1791                                  
+  1792 00000CD0 D4FED4FED4FE            	dw	-300,-300,-300 		;+150
+  1793 00000CD6 D4FED4FE2C01            	dw	-300,-300,+300		;+150
+  1794 00000CDC D4FE2C01D4FE            	dw	-300,+300,-300		;+150
+  1795 00000CE2 D4FE2C012C01            	dw	-300,+300,+300		;+150
+  1796 00000CE8 2C01D4FED4FE            	dw	+300,-300,-300 		;+150
+  1797 00000CEE 2C01D4FE2C01            	dw	+300,-300,+300 		;+150
+  1798 00000CF4 2C012C01D4FE            	dw	+300,+300,-300		;+150
+  1799 00000CFA 2C012C012C01            	dw	+300,+300,+300		;+150
+  1800                                  
+  1801 00000D00 48F460F078EC            	dw	-3000,-4000,-5000 ;+150
+  1802 00000D06 48F460F08813            	dw	-3000,-4000,+5000 ;+150
+  1803 00000D0C 48F4A00F78EC            	dw	-3000,+4000,-5000 ;+150
+  1804 00000D12 48F4A00F8813            	dw	-3000,+4000,+5000 ;+150
+  1805 00000D18 B80B60F078EC            	dw	+3000,-4000,-5000 ;+150
+  1806 00000D1E B80B60F08813            	dw	+3000,-4000,+5000 ;+150
+  1807 00000D24 B80BA00F78EC            	dw	+3000,+4000,-5000;+150
+  1808 00000D2A B80BA00F8813            	dw	+3000,+4000,+5000 ;+150
+  1809                                  	
+  1810                                  ObjectLines00:
+  1811 00000D30 0001                    	db	0,1
+  1812 00000D32 0103                    	db	1,3
+  1813 00000D34 0302                    	db	3,2
+  1814 00000D36 0200                    	db	2,0
+  1815 00000D38 0405                    	db	4,5
+  1816 00000D3A 0507                    	db	5,7
+  1817 00000D3C 0706                    	db	7,6
+  1818 00000D3E 0604                    	db	6,4
+  1819 00000D40 0004                    	db	0,4
+  1820 00000D42 0105                    	db	1,5
+  1821 00000D44 0206                    	db	2,6
+  1822 00000D46 0307                    	db	3,7
+  1823                                  
+  1824 00000D48 0CFE                    XOffset:	dw	-500
+  1825 00000D4A 0CFE                    YOffset:	dw	-500
+  1826 00000D4C C409                    ZOffset:	dw	2500 ; 2500	
+  1827                                  
+  1828                                  pershtab8:
+  1829 00000D4E 9F                       db 159
+  1830 00000D4F 9F                       db 159
+  1831 00000D50 9F                       db 159
+  1832 00000D51 9F                       db 159
+  1833 00000D52 9E                       db 158
+  1834 00000D53 9E                       db 158
+  1835 00000D54 9E                       db 158
+  1836 00000D55 9E                       db 158
+  1837 00000D56 9E                       db 158
+  1838 00000D57 9D                       db 157
+  1839 00000D58 9D                       db 157
+  1840 00000D59 9D                       db 157
+  1841 00000D5A 9D                       db 157
+  1842 00000D5B 9C                       db 156
+  1843 00000D5C 9C                       db 156
+  1844 00000D5D 9C                       db 156
+  1845 00000D5E 9C                       db 156
+  1846 00000D5F 9C                       db 156
+  1847 00000D60 9B                       db 155
+  1848 00000D61 9B                       db 155
+  1849 00000D62 9B                       db 155
+  1850 00000D63 9B                       db 155
+  1851 00000D64 9B                       db 155
+  1852 00000D65 9A                       db 154
+  1853 00000D66 9A                       db 154
+  1854 00000D67 9A                       db 154
+  1855 00000D68 9A                       db 154
+  1856 00000D69 99                       db 153
+  1857 00000D6A 99                       db 153
+  1858 00000D6B 99                       db 153
+  1859 00000D6C 99                       db 153
+  1860 00000D6D 99                       db 153
+  1861 00000D6E 98                       db 152
+  1862 00000D6F 98                       db 152
+  1863 00000D70 98                       db 152
+  1864 00000D71 98                       db 152
+  1865 00000D72 98                       db 152
+  1866 00000D73 97                       db 151
+  1867 00000D74 97                       db 151
+  1868 00000D75 97                       db 151
+  1869 00000D76 97                       db 151
+  1870 00000D77 96                       db 150
+  1871 00000D78 96                       db 150
+  1872 00000D79 96                       db 150
+  1873 00000D7A 96                       db 150
+  1874 00000D7B 96                       db 150
+  1875 00000D7C 95                       db 149
+  1876 00000D7D 95                       db 149
+  1877 00000D7E 95                       db 149
+  1878 00000D7F 95                       db 149
+  1879 00000D80 95                       db 149
+  1880 00000D81 94                       db 148
+  1881 00000D82 94                       db 148
+  1882 00000D83 94                       db 148
+  1883 00000D84 94                       db 148
+  1884 00000D85 93                       db 147
+  1885 00000D86 93                       db 147
+  1886 00000D87 93                       db 147
+  1887 00000D88 93                       db 147
+  1888 00000D89 93                       db 147
+  1889 00000D8A 92                       db 146
+  1890 00000D8B 92                       db 146
+  1891 00000D8C 92                       db 146
+  1892 00000D8D 92                       db 146
+  1893 00000D8E 92                       db 146
+  1894 00000D8F 91                       db 145
+  1895 00000D90 91                       db 145
+  1896 00000D91 91                       db 145
+  1897 00000D92 91                       db 145
+  1898 00000D93 90                       db 144
+  1899 00000D94 90                       db 144
+  1900 00000D95 90                       db 144
+  1901 00000D96 90                       db 144
+  1902 00000D97 90                       db 144
+  1903 00000D98 8F                       db 143
+  1904 00000D99 8F                       db 143
+  1905 00000D9A 8F                       db 143
+  1906 00000D9B 8F                       db 143
+  1907 00000D9C 8F                       db 143
+  1908 00000D9D 8E                       db 142
+  1909 00000D9E 8E                       db 142
+  1910 00000D9F 8E                       db 142
+  1911 00000DA0 8E                       db 142
+  1912 00000DA1 8D                       db 141
+  1913 00000DA2 8D                       db 141
+  1914 00000DA3 8D                       db 141
+  1915 00000DA4 8D                       db 141
+  1916 00000DA5 8D                       db 141
+  1917 00000DA6 8C                       db 140
+  1918 00000DA7 8C                       db 140
+  1919 00000DA8 8C                       db 140
+  1920 00000DA9 8C                       db 140
+  1921 00000DAA 8C                       db 140
+  1922 00000DAB 8B                       db 139
+  1923 00000DAC 8B                       db 139
+  1924 00000DAD 8B                       db 139
+  1925 00000DAE 8B                       db 139
+  1926 00000DAF 8A                       db 138
+  1927 00000DB0 8A                       db 138
+  1928 00000DB1 8A                       db 138
+  1929 00000DB2 8A                       db 138
+  1930 00000DB3 8A                       db 138
+  1931 00000DB4 89                       db 137
+  1932 00000DB5 89                       db 137
+  1933 00000DB6 89                       db 137
+  1934 00000DB7 89                       db 137
+  1935 00000DB8 89                       db 137
+  1936 00000DB9 88                       db 136
+  1937 00000DBA 88                       db 136
+  1938 00000DBB 88                       db 136
+  1939 00000DBC 88                       db 136
+  1940 00000DBD 87                       db 135
+  1941 00000DBE 87                       db 135
+  1942 00000DBF 87                       db 135
+  1943 00000DC0 87                       db 135
+  1944 00000DC1 87                       db 135
+  1945 00000DC2 86                       db 134
+  1946 00000DC3 86                       db 134
+  1947 00000DC4 86                       db 134
+  1948 00000DC5 86                       db 134
+  1949 00000DC6 86                       db 134
+  1950 00000DC7 85                       db 133
+  1951 00000DC8 85                       db 133
+  1952 00000DC9 85                       db 133
+  1953 00000DCA 85                       db 133
+  1954 00000DCB 84                       db 132
+  1955 00000DCC 84                       db 132
+  1956 00000DCD 84                       db 132
+  1957 00000DCE 84                       db 132
+  1958 00000DCF 84                       db 132
+  1959 00000DD0 83                       db 131
+  1960 00000DD1 83                       db 131
+  1961 00000DD2 83                       db 131
+  1962 00000DD3 83                       db 131
+  1963 00000DD4 82                       db 130
+  1964 00000DD5 82                       db 130
+  1965 00000DD6 82                       db 130
+  1966 00000DD7 82                       db 130
+  1967 00000DD8 82                       db 130
+  1968 00000DD9 81                       db 129
+  1969 00000DDA 81                       db 129
+  1970 00000DDB 81                       db 129
+  1971 00000DDC 81                       db 129
+  1972 00000DDD 81                       db 129
+  1973 00000DDE 80                       db 128
+  1974 00000DDF 80                       db 128
+  1975 00000DE0 80                       db 128
+  1976 00000DE1 80                       db 128
+  1977 00000DE2 7F                       db 127
+  1978 00000DE3 7F                       db 127
+  1979 00000DE4 7F                       db 127
+  1980 00000DE5 7F                       db 127
+  1981 00000DE6 7F                       db 127
+  1982 00000DE7 7E                       db 126
+  1983 00000DE8 7E                       db 126
+  1984 00000DE9 7E                       db 126
+  1985 00000DEA 7E                       db 126
+  1986 00000DEB 7E                       db 126
+  1987 00000DEC 7D                       db 125
+  1988 00000DED 7D                       db 125
+  1989 00000DEE 7D                       db 125
+  1990 00000DEF 7D                       db 125
+  1991 00000DF0 7C                       db 124
+  1992 00000DF1 7C                       db 124
+  1993 00000DF2 7C                       db 124
+  1994 00000DF3 7C                       db 124
+  1995 00000DF4 7C                       db 124
+  1996 00000DF5 7B                       db 123
+  1997 00000DF6 7B                       db 123
+  1998 00000DF7 7B                       db 123
+  1999 00000DF8 7B                       db 123
+  2000 00000DF9 7B                       db 123
+  2001 00000DFA 7A                       db 122
+  2002 00000DFB 7A                       db 122
+  2003 00000DFC 7A                       db 122
+  2004 00000DFD 7A                       db 122
+  2005 00000DFE 79                       db 121
+  2006 00000DFF 79                       db 121
+  2007 00000E00 79                       db 121
+  2008 00000E01 79                       db 121
+  2009 00000E02 79                       db 121
+  2010 00000E03 78                       db 120
+  2011 00000E04 78                       db 120
+  2012 00000E05 78                       db 120
+  2013 00000E06 78                       db 120
+  2014 00000E07 78                       db 120
+  2015 00000E08 77                       db 119
+  2016 00000E09 77                       db 119
+  2017 00000E0A 77                       db 119
+  2018 00000E0B 77                       db 119
+  2019 00000E0C 76                       db 118
+  2020 00000E0D 76                       db 118
+  2021 00000E0E 76                       db 118
+  2022 00000E0F 76                       db 118
+  2023 00000E10 76                       db 118
+  2024 00000E11 75                       db 117
+  2025 00000E12 75                       db 117
+  2026 00000E13 75                       db 117
+  2027 00000E14 75                       db 117
+  2028 00000E15 75                       db 117
+  2029 00000E16 74                       db 116
+  2030 00000E17 74                       db 116
+  2031 00000E18 74                       db 116
+  2032 00000E19 74                       db 116
+  2033 00000E1A 73                       db 115
+  2034 00000E1B 73                       db 115
+  2035 00000E1C 73                       db 115
+  2036 00000E1D 73                       db 115
+  2037 00000E1E 73                       db 115
+  2038 00000E1F 72                       db 114
+  2039 00000E20 72                       db 114
+  2040 00000E21 72                       db 114
+  2041 00000E22 72                       db 114
+  2042 00000E23 72                       db 114
+  2043 00000E24 71                       db 113
+  2044 00000E25 71                       db 113
+  2045 00000E26 71                       db 113
+  2046 00000E27 71                       db 113
+  2047 00000E28 70                       db 112
+  2048 00000E29 70                       db 112
+  2049 00000E2A 70                       db 112
+  2050 00000E2B 70                       db 112
+  2051 00000E2C 70                       db 112
+  2052 00000E2D 6F                       db 111
+  2053 00000E2E 6F                       db 111
+  2054 00000E2F 6F                       db 111
+  2055 00000E30 6F                       db 111
+  2056 00000E31 6F                       db 111
+  2057 00000E32 6E                       db 110
+  2058 00000E33 6E                       db 110
+  2059 00000E34 6E                       db 110
+  2060 00000E35 6E                       db 110
+  2061 00000E36 6D                       db 109
+  2062 00000E37 6D                       db 109
+  2063 00000E38 6D                       db 109
+  2064 00000E39 6D                       db 109
+  2065 00000E3A 6D                       db 109
+  2066 00000E3B 6C                       db 108
+  2067 00000E3C 6C                       db 108
+  2068 00000E3D 6C                       db 108
+  2069 00000E3E 6C                       db 108
+  2070 00000E3F 6C                       db 108
+  2071 00000E40 6B                       db 107
+  2072 00000E41 6B                       db 107
+  2073 00000E42 6B                       db 107
+  2074 00000E43 6B                       db 107
+  2075 00000E44 6A                       db 106
+  2076 00000E45 6A                       db 106
+  2077 00000E46 6A                       db 106
+  2078 00000E47 6A                       db 106
+  2079 00000E48 6A                       db 106
+  2080 00000E49 69                       db 105
+  2081 00000E4A 69                       db 105
+  2082 00000E4B 69                       db 105
+  2083 00000E4C 69                       db 105
+  2084 00000E4D 69                       db 105
+  2085                                  
+  2086                                  persvtab8:
+  2087 00000E4E C7                       db 199
+  2088 00000E4F C7                       db 199
+  2089 00000E50 C7                       db 199
+  2090 00000E51 C6                       db 198
+  2091 00000E52 C6                       db 198
+  2092 00000E53 C6                       db 198
+  2093 00000E54 C6                       db 198
+  2094 00000E55 C5                       db 197
+  2095 00000E56 C5                       db 197
+  2096 00000E57 C5                       db 197
+  2097 00000E58 C5                       db 197
+  2098 00000E59 C4                       db 196
+  2099 00000E5A C4                       db 196
+  2100 00000E5B C4                       db 196
+  2101 00000E5C C3                       db 195
+  2102 00000E5D C3                       db 195
+  2103 00000E5E C3                       db 195
+  2104 00000E5F C3                       db 195
+  2105 00000E60 C2                       db 194
+  2106 00000E61 C2                       db 194
+  2107 00000E62 C2                       db 194
+  2108 00000E63 C2                       db 194
+  2109 00000E64 C1                       db 193
+  2110 00000E65 C1                       db 193
+  2111 00000E66 C1                       db 193
+  2112 00000E67 C0                       db 192
+  2113 00000E68 C0                       db 192
+  2114 00000E69 C0                       db 192
+  2115 00000E6A C0                       db 192
+  2116 00000E6B BF                       db 191
+  2117 00000E6C BF                       db 191
+  2118 00000E6D BF                       db 191
+  2119 00000E6E BF                       db 191
+  2120 00000E6F BE                       db 190
+  2121 00000E70 BE                       db 190
+  2122 00000E71 BE                       db 190
+  2123 00000E72 BE                       db 190
+  2124 00000E73 BD                       db 189
+  2125 00000E74 BD                       db 189
+  2126 00000E75 BD                       db 189
+  2127 00000E76 BC                       db 188
+  2128 00000E77 BC                       db 188
+  2129 00000E78 BC                       db 188
+  2130 00000E79 BC                       db 188
+  2131 00000E7A BB                       db 187
+  2132 00000E7B BB                       db 187
+  2133 00000E7C BB                       db 187
+  2134 00000E7D BB                       db 187
+  2135 00000E7E BA                       db 186
+  2136 00000E7F BA                       db 186
+  2137 00000E80 BA                       db 186
+  2138 00000E81 B9                       db 185
+  2139 00000E82 B9                       db 185
+  2140 00000E83 B9                       db 185
+  2141 00000E84 B9                       db 185
+  2142 00000E85 B8                       db 184
+  2143 00000E86 B8                       db 184
+  2144 00000E87 B8                       db 184
+  2145 00000E88 B8                       db 184
+  2146 00000E89 B7                       db 183
+  2147 00000E8A B7                       db 183
+  2148 00000E8B B7                       db 183
+  2149 00000E8C B7                       db 183
+  2150 00000E8D B6                       db 182
+  2151 00000E8E B6                       db 182
+  2152 00000E8F B6                       db 182
+  2153 00000E90 B5                       db 181
+  2154 00000E91 B5                       db 181
+  2155 00000E92 B5                       db 181
+  2156 00000E93 B5                       db 181
+  2157 00000E94 B4                       db 180
+  2158 00000E95 B4                       db 180
+  2159 00000E96 B4                       db 180
+  2160 00000E97 B4                       db 180
+  2161 00000E98 B3                       db 179
+  2162 00000E99 B3                       db 179
+  2163 00000E9A B3                       db 179
+  2164 00000E9B B2                       db 178
+  2165 00000E9C B2                       db 178
+  2166 00000E9D B2                       db 178
+  2167 00000E9E B2                       db 178
+  2168 00000E9F B1                       db 177
+  2169 00000EA0 B1                       db 177
+  2170 00000EA1 B1                       db 177
+  2171 00000EA2 B1                       db 177
+  2172 00000EA3 B0                       db 176
+  2173 00000EA4 B0                       db 176
+  2174 00000EA5 B0                       db 176
+  2175 00000EA6 B0                       db 176
+  2176 00000EA7 AF                       db 175
+  2177 00000EA8 AF                       db 175
+  2178 00000EA9 AF                       db 175
+  2179 00000EAA AE                       db 174
+  2180 00000EAB AE                       db 174
+  2181 00000EAC AE                       db 174
+  2182 00000EAD AE                       db 174
+  2183 00000EAE AD                       db 173
+  2184 00000EAF AD                       db 173
+  2185 00000EB0 AD                       db 173
+  2186 00000EB1 AD                       db 173
+  2187 00000EB2 AC                       db 172
+  2188 00000EB3 AC                       db 172
+  2189 00000EB4 AC                       db 172
+  2190 00000EB5 AB                       db 171
+  2191 00000EB6 AB                       db 171
+  2192 00000EB7 AB                       db 171
+  2193 00000EB8 AB                       db 171
+  2194 00000EB9 AA                       db 170
+  2195 00000EBA AA                       db 170
+  2196 00000EBB AA                       db 170
+  2197 00000EBC AA                       db 170
+  2198 00000EBD A9                       db 169
+  2199 00000EBE A9                       db 169
+  2200 00000EBF A9                       db 169
+  2201 00000EC0 A9                       db 169
+  2202 00000EC1 A8                       db 168
+  2203 00000EC2 A8                       db 168
+  2204 00000EC3 A8                       db 168
+  2205 00000EC4 A7                       db 167
+  2206 00000EC5 A7                       db 167
+  2207 00000EC6 A7                       db 167
+  2208 00000EC7 A7                       db 167
+  2209 00000EC8 A6                       db 166
+  2210 00000EC9 A6                       db 166
+  2211 00000ECA A6                       db 166
+  2212 00000ECB A6                       db 166
+  2213 00000ECC A5                       db 165
+  2214 00000ECD A5                       db 165
+  2215 00000ECE A5                       db 165
+  2216 00000ECF A4                       db 164
+  2217 00000ED0 A4                       db 164
+  2218 00000ED1 A4                       db 164
+  2219 00000ED2 A4                       db 164
+  2220 00000ED3 A3                       db 163
+  2221 00000ED4 A3                       db 163
+  2222 00000ED5 A3                       db 163
+  2223 00000ED6 A3                       db 163
+  2224 00000ED7 A2                       db 162
+  2225 00000ED8 A2                       db 162
+  2226 00000ED9 A2                       db 162
+  2227 00000EDA A1                       db 161
+  2228 00000EDB A1                       db 161
+  2229 00000EDC A1                       db 161
+  2230 00000EDD A1                       db 161
+  2231 00000EDE A0                       db 160
+  2232 00000EDF A0                       db 160
+  2233 00000EE0 A0                       db 160
+  2234 00000EE1 A0                       db 160
+  2235 00000EE2 9F                       db 159
+  2236 00000EE3 9F                       db 159
+  2237 00000EE4 9F                       db 159
+  2238 00000EE5 9F                       db 159
+  2239 00000EE6 9E                       db 158
+  2240 00000EE7 9E                       db 158
+  2241 00000EE8 9E                       db 158
+  2242 00000EE9 9D                       db 157
+  2243 00000EEA 9D                       db 157
+  2244 00000EEB 9D                       db 157
+  2245 00000EEC 9D                       db 157
+  2246 00000EED 9C                       db 156
+  2247 00000EEE 9C                       db 156
+  2248 00000EEF 9C                       db 156
+  2249 00000EF0 9C                       db 156
+  2250 00000EF1 9B                       db 155
+  2251 00000EF2 9B                       db 155
+  2252 00000EF3 9B                       db 155
+  2253 00000EF4 9A                       db 154
+  2254 00000EF5 9A                       db 154
+  2255 00000EF6 9A                       db 154
+  2256 00000EF7 9A                       db 154
+  2257 00000EF8 99                       db 153
+  2258 00000EF9 99                       db 153
+  2259 00000EFA 99                       db 153
+  2260 00000EFB 99                       db 153
+  2261 00000EFC 98                       db 152
+  2262 00000EFD 98                       db 152
+  2263 00000EFE 98                       db 152
+  2264 00000EFF 98                       db 152
+  2265 00000F00 97                       db 151
+  2266 00000F01 97                       db 151
+  2267 00000F02 97                       db 151
+  2268 00000F03 96                       db 150
+  2269 00000F04 96                       db 150
+  2270 00000F05 96                       db 150
+  2271 00000F06 96                       db 150
+  2272 00000F07 95                       db 149
+  2273 00000F08 95                       db 149
+  2274 00000F09 95                       db 149
+  2275 00000F0A 95                       db 149
+  2276 00000F0B 94                       db 148
+  2277 00000F0C 94                       db 148
+  2278 00000F0D 94                       db 148
+  2279 00000F0E 93                       db 147
+  2280 00000F0F 93                       db 147
+  2281 00000F10 93                       db 147
+  2282 00000F11 93                       db 147
+  2283 00000F12 92                       db 146
+  2284 00000F13 92                       db 146
+  2285 00000F14 92                       db 146
+  2286 00000F15 92                       db 146
+  2287 00000F16 91                       db 145
+  2288 00000F17 91                       db 145
+  2289 00000F18 91                       db 145
+  2290 00000F19 91                       db 145
+  2291 00000F1A 90                       db 144
+  2292 00000F1B 90                       db 144
+  2293 00000F1C 90                       db 144
+  2294 00000F1D 8F                       db 143
+  2295 00000F1E 8F                       db 143
+  2296 00000F1F 8F                       db 143
+  2297 00000F20 8F                       db 143
+  2298 00000F21 8E                       db 142
+  2299 00000F22 8E                       db 142
+  2300 00000F23 8E                       db 142
+  2301 00000F24 8E                       db 142
+  2302 00000F25 8D                       db 141
+  2303 00000F26 8D                       db 141
+  2304 00000F27 8D                       db 141
+  2305 00000F28 8C                       db 140
+  2306 00000F29 8C                       db 140
+  2307 00000F2A 8C                       db 140
+  2308 00000F2B 8C                       db 140
+  2309 00000F2C 8B                       db 139
+  2310 00000F2D 8B                       db 139
+  2311 00000F2E 8B                       db 139
+  2312 00000F2F 8B                       db 139
+  2313 00000F30 8A                       db 138
+  2314 00000F31 8A                       db 138
+  2315 00000F32 8A                       db 138
+  2316 00000F33 8A                       db 138
+  2317 00000F34 89                       db 137
+  2318 00000F35 89                       db 137
+  2319 00000F36 89                       db 137
+  2320 00000F37 88                       db 136
+  2321 00000F38 88                       db 136
+  2322 00000F39 88                       db 136
+  2323 00000F3A 88                       db 136
+  2324 00000F3B 87                       db 135
+  2325 00000F3C 87                       db 135
+  2326 00000F3D 87                       db 135
+  2327 00000F3E 87                       db 135
+  2328 00000F3F 86                       db 134
+  2329 00000F40 86                       db 134
+  2330 00000F41 86                       db 134
+  2331 00000F42 85                       db 133
+  2332 00000F43 85                       db 133
+  2333 00000F44 85                       db 133
+  2334 00000F45 85                       db 133
+  2335 00000F46 84                       db 132
+  2336 00000F47 84                       db 132
+  2337 00000F48 84                       db 132
+  2338 00000F49 84                       db 132
+  2339 00000F4A 83                       db 131
+  2340 00000F4B 83                       db 131
+  2341 00000F4C 83                       db 131
+  2342 00000F4D 83                       db 131
+  2343                                  
+  2344                                  pershtab256:
+  2345 00000F4E 01FF                     dw -255
+  2346 00000F50 02FF                     dw -254
+  2347 00000F52 03FF                     dw -253
+  2348 00000F54 04FF                     dw -252
+  2349 00000F56 05FF                     dw -251
+  2350 00000F58 06FF                     dw -250
+  2351 00000F5A 07FF                     dw -249
+  2352 00000F5C 08FF                     dw -248
+  2353 00000F5E 09FF                     dw -247
+  2354 00000F60 0AFF                     dw -246
+  2355 00000F62 0BFF                     dw -245
+  2356 00000F64 0CFF                     dw -244
+  2357 00000F66 0DFF                     dw -243
+  2358 00000F68 0EFF                     dw -242
+  2359 00000F6A 0FFF                     dw -241
+  2360 00000F6C 10FF                     dw -240
+  2361 00000F6E 11FF                     dw -239
+  2362 00000F70 12FF                     dw -238
+  2363 00000F72 13FF                     dw -237
+  2364 00000F74 14FF                     dw -236
+  2365 00000F76 15FF                     dw -235
+  2366 00000F78 16FF                     dw -234
+  2367 00000F7A 17FF                     dw -233
+  2368 00000F7C 18FF                     dw -232
+  2369 00000F7E 19FF                     dw -231
+  2370 00000F80 1AFF                     dw -230
+  2371 00000F82 1BFF                     dw -229
+  2372 00000F84 1CFF                     dw -228
+  2373 00000F86 1DFF                     dw -227
+  2374 00000F88 1EFF                     dw -226
+  2375 00000F8A 1FFF                     dw -225
+  2376 00000F8C 20FF                     dw -224
+  2377 00000F8E 21FF                     dw -223
+  2378 00000F90 22FF                     dw -222
+  2379 00000F92 23FF                     dw -221
+  2380 00000F94 24FF                     dw -220
+  2381 00000F96 25FF                     dw -219
+  2382 00000F98 26FF                     dw -218
+  2383 00000F9A 27FF                     dw -217
+  2384 00000F9C 28FF                     dw -216
+  2385 00000F9E 29FF                     dw -215
+  2386 00000FA0 2AFF                     dw -214
+  2387 00000FA2 2BFF                     dw -213
+  2388 00000FA4 2CFF                     dw -212
+  2389 00000FA6 2DFF                     dw -211
+  2390 00000FA8 2EFF                     dw -210
+  2391 00000FAA 2FFF                     dw -209
+  2392 00000FAC 30FF                     dw -208
+  2393 00000FAE 31FF                     dw -207
+  2394 00000FB0 32FF                     dw -206
+  2395 00000FB2 33FF                     dw -205
+  2396 00000FB4 34FF                     dw -204
+  2397 00000FB6 35FF                     dw -203
+  2398 00000FB8 36FF                     dw -202
+  2399 00000FBA 37FF                     dw -201
+  2400 00000FBC 38FF                     dw -200
+  2401 00000FBE 39FF                     dw -199
+  2402 00000FC0 3AFF                     dw -198
+  2403 00000FC2 3BFF                     dw -197
+  2404 00000FC4 3CFF                     dw -196
+  2405 00000FC6 3DFF                     dw -195
+  2406 00000FC8 3EFF                     dw -194
+  2407 00000FCA 3FFF                     dw -193
+  2408 00000FCC 40FF                     dw -192
+  2409 00000FCE 41FF                     dw -191
+  2410 00000FD0 42FF                     dw -190
+  2411 00000FD2 43FF                     dw -189
+  2412 00000FD4 44FF                     dw -188
+  2413 00000FD6 45FF                     dw -187
+  2414 00000FD8 46FF                     dw -186
+  2415 00000FDA 47FF                     dw -185
+  2416 00000FDC 48FF                     dw -184
+  2417 00000FDE 49FF                     dw -183
+  2418 00000FE0 4AFF                     dw -182
+  2419 00000FE2 4BFF                     dw -181
+  2420 00000FE4 4CFF                     dw -180
+  2421 00000FE6 4DFF                     dw -179
+  2422 00000FE8 4EFF                     dw -178
+  2423 00000FEA 4FFF                     dw -177
+  2424 00000FEC 50FF                     dw -176
+  2425 00000FEE 51FF                     dw -175
+  2426 00000FF0 52FF                     dw -174
+  2427 00000FF2 53FF                     dw -173
+  2428 00000FF4 54FF                     dw -172
+  2429 00000FF6 55FF                     dw -171
+  2430 00000FF8 56FF                     dw -170
+  2431 00000FFA 57FF                     dw -169
+  2432 00000FFC 58FF                     dw -168
+  2433 00000FFE 59FF                     dw -167
+  2434 00001000 5AFF                     dw -166
+  2435 00001002 5BFF                     dw -165
+  2436 00001004 5CFF                     dw -164
+  2437 00001006 5DFF                     dw -163
+  2438 00001008 5EFF                     dw -162
+  2439 0000100A 5FFF                     dw -161
+  2440 0000100C 60FF                     dw -160
+  2441 0000100E 61FF                     dw -159
+  2442 00001010 62FF                     dw -158
+  2443 00001012 63FF                     dw -157
+  2444 00001014 64FF                     dw -156
+  2445 00001016 65FF                     dw -155
+  2446 00001018 66FF                     dw -154
+  2447 0000101A 67FF                     dw -153
+  2448 0000101C 68FF                     dw -152
+  2449 0000101E 69FF                     dw -151
+  2450 00001020 6AFF                     dw -150
+  2451 00001022 6BFF                     dw -149
+  2452 00001024 6CFF                     dw -148
+  2453 00001026 6DFF                     dw -147
+  2454 00001028 6EFF                     dw -146
+  2455 0000102A 6FFF                     dw -145
+  2456 0000102C 70FF                     dw -144
+  2457 0000102E 71FF                     dw -143
+  2458 00001030 72FF                     dw -142
+  2459 00001032 73FF                     dw -141
+  2460 00001034 74FF                     dw -140
+  2461 00001036 75FF                     dw -139
+  2462 00001038 76FF                     dw -138
+  2463 0000103A 77FF                     dw -137
+  2464 0000103C 78FF                     dw -136
+  2465 0000103E 79FF                     dw -135
+  2466 00001040 7AFF                     dw -134
+  2467 00001042 7BFF                     dw -133
+  2468 00001044 7CFF                     dw -132
+  2469 00001046 7DFF                     dw -131
+  2470 00001048 7EFF                     dw -130
+  2471 0000104A 7FFF                     dw -129
+  2472 0000104C 80FF                     dw -128
+  2473 0000104E 81FF                     dw -127
+  2474 00001050 82FF                     dw -126
+  2475 00001052 83FF                     dw -125
+  2476 00001054 84FF                     dw -124
+  2477 00001056 85FF                     dw -123
+  2478 00001058 86FF                     dw -122
+  2479 0000105A 87FF                     dw -121
+  2480 0000105C 88FF                     dw -120
+  2481 0000105E 89FF                     dw -119
+  2482 00001060 8AFF                     dw -118
+  2483 00001062 8BFF                     dw -117
+  2484 00001064 8CFF                     dw -116
+  2485 00001066 8DFF                     dw -115
+  2486 00001068 8EFF                     dw -114
+  2487 0000106A 8FFF                     dw -113
+  2488 0000106C 90FF                     dw -112
+  2489 0000106E 91FF                     dw -111
+  2490 00001070 92FF                     dw -110
+  2491 00001072 93FF                     dw -109
+  2492 00001074 94FF                     dw -108
+  2493 00001076 95FF                     dw -107
+  2494 00001078 96FF                     dw -106
+  2495 0000107A 97FF                     dw -105
+  2496 0000107C 98FF                     dw -104
+  2497 0000107E 99FF                     dw -103
+  2498 00001080 9AFF                     dw -102
+  2499 00001082 9BFF                     dw -101
+  2500 00001084 9CFF                     dw -100
+  2501 00001086 9DFF                     dw -99
+  2502 00001088 9EFF                     dw -98
+  2503 0000108A 9FFF                     dw -97
+  2504 0000108C A0FF                     dw -96
+  2505 0000108E A1FF                     dw -95
+  2506 00001090 A2FF                     dw -94
+  2507 00001092 A3FF                     dw -93
+  2508 00001094 A4FF                     dw -92
+  2509 00001096 A5FF                     dw -91
+  2510 00001098 A6FF                     dw -90
+  2511 0000109A A7FF                     dw -89
+  2512 0000109C A8FF                     dw -88
+  2513 0000109E A9FF                     dw -87
+  2514 000010A0 AAFF                     dw -86
+  2515 000010A2 ABFF                     dw -85
+  2516 000010A4 ACFF                     dw -84
+  2517 000010A6 ADFF                     dw -83
+  2518 000010A8 AEFF                     dw -82
+  2519 000010AA AFFF                     dw -81
+  2520 000010AC B0FF                     dw -80
+  2521 000010AE B1FF                     dw -79
+  2522 000010B0 B2FF                     dw -78
+  2523 000010B2 B3FF                     dw -77
+  2524 000010B4 B4FF                     dw -76
+  2525 000010B6 B5FF                     dw -75
+  2526 000010B8 B6FF                     dw -74
+  2527 000010BA B7FF                     dw -73
+  2528 000010BC B8FF                     dw -72
+  2529 000010BE B9FF                     dw -71
+  2530 000010C0 BAFF                     dw -70
+  2531 000010C2 BBFF                     dw -69
+  2532 000010C4 BCFF                     dw -68
+  2533 000010C6 BDFF                     dw -67
+  2534 000010C8 BEFF                     dw -66
+  2535 000010CA BFFF                     dw -65
+  2536 000010CC C0FF                     dw -64
+  2537 000010CE C1FF                     dw -63
+  2538 000010D0 C2FF                     dw -62
+  2539 000010D2 C3FF                     dw -61
+  2540 000010D4 C4FF                     dw -60
+  2541 000010D6 C5FF                     dw -59
+  2542 000010D8 C6FF                     dw -58
+  2543 000010DA C7FF                     dw -57
+  2544 000010DC C8FF                     dw -56
+  2545 000010DE C9FF                     dw -55
+  2546 000010E0 CAFF                     dw -54
+  2547 000010E2 CBFF                     dw -53
+  2548 000010E4 CCFF                     dw -52
+  2549 000010E6 CDFF                     dw -51
+  2550 000010E8 CEFF                     dw -50
+  2551 000010EA CFFF                     dw -49
+  2552 000010EC D0FF                     dw -48
+  2553 000010EE D1FF                     dw -47
+  2554 000010F0 D2FF                     dw -46
+  2555 000010F2 D3FF                     dw -45
+  2556 000010F4 D4FF                     dw -44
+  2557 000010F6 D5FF                     dw -43
+  2558 000010F8 D6FF                     dw -42
+  2559 000010FA D7FF                     dw -41
+  2560 000010FC D8FF                     dw -40
+  2561 000010FE D9FF                     dw -39
+  2562 00001100 DAFF                     dw -38
+  2563 00001102 DBFF                     dw -37
+  2564 00001104 DCFF                     dw -36
+  2565 00001106 DDFF                     dw -35
+  2566 00001108 DEFF                     dw -34
+  2567 0000110A DFFF                     dw -33
+  2568 0000110C E0FF                     dw -32
+  2569 0000110E E1FF                     dw -31
+  2570 00001110 E2FF                     dw -30
+  2571 00001112 E3FF                     dw -29
+  2572 00001114 E4FF                     dw -28
+  2573 00001116 E5FF                     dw -27
+  2574 00001118 E6FF                     dw -26
+  2575 0000111A E7FF                     dw -25
+  2576 0000111C E8FF                     dw -24
+  2577 0000111E E9FF                     dw -23
+  2578 00001120 EAFF                     dw -22
+  2579 00001122 EBFF                     dw -21
+  2580 00001124 ECFF                     dw -20
+  2581 00001126 EDFF                     dw -19
+  2582 00001128 EEFF                     dw -18
+  2583 0000112A EFFF                     dw -17
+  2584 0000112C F0FF                     dw -16
+  2585 0000112E F1FF                     dw -15
+  2586 00001130 F2FF                     dw -14
+  2587 00001132 F3FF                     dw -13
+  2588 00001134 F4FF                     dw -12
+  2589 00001136 F5FF                     dw -11
+  2590 00001138 F6FF                     dw -10
+  2591 0000113A F7FF                     dw -9
+  2592 0000113C F8FF                     dw -8
+  2593 0000113E F9FF                     dw -7
+  2594 00001140 FAFF                     dw -6
+  2595 00001142 FBFF                     dw -5
+  2596 00001144 FCFF                     dw -4
+  2597 00001146 FDFF                     dw -3
+  2598 00001148 FEFF                     dw -2
+  2599 0000114A FFFF                     dw -1
+  2600 0000114C 0000                     dw 0
+  2601 0000114E 0100                     dw 1
+  2602 00001150 0200                     dw 2
+  2603 00001152 0300                     dw 3
+  2604 00001154 0400                     dw 4
+  2605 00001156 0500                     dw 5
+  2606 00001158 0600                     dw 6
+  2607 0000115A 0700                     dw 7
+  2608 0000115C 0800                     dw 8
+  2609 0000115E 0900                     dw 9
+  2610 00001160 0A00                     dw 10
+  2611 00001162 0B00                     dw 11
+  2612 00001164 0C00                     dw 12
+  2613 00001166 0D00                     dw 13
+  2614 00001168 0E00                     dw 14
+  2615 0000116A 0F00                     dw 15
+  2616 0000116C 1000                     dw 16
+  2617 0000116E 1100                     dw 17
+  2618 00001170 1200                     dw 18
+  2619 00001172 1300                     dw 19
+  2620 00001174 1400                     dw 20
+  2621 00001176 1500                     dw 21
+  2622 00001178 1600                     dw 22
+  2623 0000117A 1700                     dw 23
+  2624 0000117C 1800                     dw 24
+  2625 0000117E 1900                     dw 25
+  2626 00001180 1A00                     dw 26
+  2627 00001182 1B00                     dw 27
+  2628 00001184 1C00                     dw 28
+  2629 00001186 1D00                     dw 29
+  2630 00001188 1E00                     dw 30
+  2631 0000118A 1F00                     dw 31
+  2632 0000118C 2000                     dw 32
+  2633 0000118E 2100                     dw 33
+  2634 00001190 2200                     dw 34
+  2635 00001192 2300                     dw 35
+  2636 00001194 2400                     dw 36
+  2637 00001196 2500                     dw 37
+  2638 00001198 2600                     dw 38
+  2639 0000119A 2700                     dw 39
+  2640 0000119C 2800                     dw 40
+  2641 0000119E 2900                     dw 41
+  2642 000011A0 2A00                     dw 42
+  2643 000011A2 2B00                     dw 43
+  2644 000011A4 2C00                     dw 44
+  2645 000011A6 2D00                     dw 45
+  2646 000011A8 2E00                     dw 46
+  2647 000011AA 2F00                     dw 47
+  2648 000011AC 3000                     dw 48
+  2649 000011AE 3100                     dw 49
+  2650 000011B0 3200                     dw 50
+  2651 000011B2 3300                     dw 51
+  2652 000011B4 3400                     dw 52
+  2653 000011B6 3500                     dw 53
+  2654 000011B8 3600                     dw 54
+  2655 000011BA 3700                     dw 55
+  2656 000011BC 3800                     dw 56
+  2657 000011BE 3900                     dw 57
+  2658 000011C0 3A00                     dw 58
+  2659 000011C2 3B00                     dw 59
+  2660 000011C4 3C00                     dw 60
+  2661 000011C6 3D00                     dw 61
+  2662 000011C8 3E00                     dw 62
+  2663 000011CA 3F00                     dw 63
+  2664 000011CC 4000                     dw 64
+  2665 000011CE 4100                     dw 65
+  2666 000011D0 4200                     dw 66
+  2667 000011D2 4300                     dw 67
+  2668 000011D4 4400                     dw 68
+  2669 000011D6 4500                     dw 69
+  2670 000011D8 4600                     dw 70
+  2671 000011DA 4700                     dw 71
+  2672 000011DC 4800                     dw 72
+  2673 000011DE 4900                     dw 73
+  2674 000011E0 4A00                     dw 74
+  2675 000011E2 4B00                     dw 75
+  2676 000011E4 4C00                     dw 76
+  2677 000011E6 4D00                     dw 77
+  2678 000011E8 4E00                     dw 78
+  2679 000011EA 4F00                     dw 79
+  2680 000011EC 5000                     dw 80
+  2681 000011EE 5100                     dw 81
+  2682 000011F0 5200                     dw 82
+  2683 000011F2 5300                     dw 83
+  2684 000011F4 5400                     dw 84
+  2685 000011F6 5500                     dw 85
+  2686 000011F8 5600                     dw 86
+  2687 000011FA 5700                     dw 87
+  2688 000011FC 5800                     dw 88
+  2689 000011FE 5900                     dw 89
+  2690 00001200 5A00                     dw 90
+  2691 00001202 5B00                     dw 91
+  2692 00001204 5C00                     dw 92
+  2693 00001206 5D00                     dw 93
+  2694 00001208 5E00                     dw 94
+  2695 0000120A 5F00                     dw 95
+  2696 0000120C 6000                     dw 96
+  2697 0000120E 6100                     dw 97
+  2698 00001210 6200                     dw 98
+  2699 00001212 6300                     dw 99
+  2700 00001214 6400                     dw 100
+  2701 00001216 6500                     dw 101
+  2702 00001218 6600                     dw 102
+  2703 0000121A 6700                     dw 103
+  2704 0000121C 6800                     dw 104
+  2705 0000121E 6900                     dw 105
+  2706 00001220 6A00                     dw 106
+  2707 00001222 6B00                     dw 107
+  2708 00001224 6C00                     dw 108
+  2709 00001226 6D00                     dw 109
+  2710 00001228 6E00                     dw 110
+  2711 0000122A 6F00                     dw 111
+  2712 0000122C 7000                     dw 112
+  2713 0000122E 7100                     dw 113
+  2714 00001230 7200                     dw 114
+  2715 00001232 7300                     dw 115
+  2716 00001234 7400                     dw 116
+  2717 00001236 7500                     dw 117
+  2718 00001238 7600                     dw 118
+  2719 0000123A 7700                     dw 119
+  2720 0000123C 7800                     dw 120
+  2721 0000123E 7900                     dw 121
+  2722 00001240 7A00                     dw 122
+  2723 00001242 7B00                     dw 123
+  2724 00001244 7C00                     dw 124
+  2725 00001246 7D00                     dw 125
+  2726 00001248 7E00                     dw 126
+  2727 0000124A 7F00                     dw 127
+  2728 0000124C 8000                     dw 128
+  2729 0000124E 8100                     dw 129
+  2730 00001250 8200                     dw 130
+  2731 00001252 8300                     dw 131
+  2732 00001254 8400                     dw 132
+  2733 00001256 8500                     dw 133
+  2734 00001258 8600                     dw 134
+  2735 0000125A 8700                     dw 135
+  2736 0000125C 8800                     dw 136
+  2737 0000125E 8900                     dw 137
+  2738 00001260 8A00                     dw 138
+  2739 00001262 8B00                     dw 139
+  2740 00001264 8C00                     dw 140
+  2741 00001266 8D00                     dw 141
+  2742 00001268 8E00                     dw 142
+  2743 0000126A 8F00                     dw 143
+  2744 0000126C 9000                     dw 144
+  2745 0000126E 9100                     dw 145
+  2746 00001270 9200                     dw 146
+  2747 00001272 9300                     dw 147
+  2748 00001274 9400                     dw 148
+  2749 00001276 9500                     dw 149
+  2750 00001278 9600                     dw 150
+  2751 0000127A 9700                     dw 151
+  2752 0000127C 9800                     dw 152
+  2753 0000127E 9900                     dw 153
+  2754 00001280 9A00                     dw 154
+  2755 00001282 9B00                     dw 155
+  2756 00001284 9C00                     dw 156
+  2757 00001286 9D00                     dw 157
+  2758 00001288 9E00                     dw 158
+  2759 0000128A 9F00                     dw 159
+  2760 0000128C A000                     dw 160
+  2761 0000128E A100                     dw 161
+  2762 00001290 A200                     dw 162
+  2763 00001292 A300                     dw 163
+  2764 00001294 A400                     dw 164
+  2765 00001296 A500                     dw 165
+  2766 00001298 A600                     dw 166
+  2767 0000129A A700                     dw 167
+  2768 0000129C A800                     dw 168
+  2769 0000129E A900                     dw 169
+  2770 000012A0 AA00                     dw 170
+  2771 000012A2 AB00                     dw 171
+  2772 000012A4 AC00                     dw 172
+  2773 000012A6 AD00                     dw 173
+  2774 000012A8 AE00                     dw 174
+  2775 000012AA AF00                     dw 175
+  2776 000012AC B000                     dw 176
+  2777 000012AE B100                     dw 177
+  2778 000012B0 B200                     dw 178
+  2779 000012B2 B300                     dw 179
+  2780 000012B4 B400                     dw 180
+  2781 000012B6 B500                     dw 181
+  2782 000012B8 B600                     dw 182
+  2783 000012BA B700                     dw 183
+  2784 000012BC B800                     dw 184
+  2785 000012BE B900                     dw 185
+  2786 000012C0 BA00                     dw 186
+  2787 000012C2 BB00                     dw 187
+  2788 000012C4 BC00                     dw 188
+  2789 000012C6 BD00                     dw 189
+  2790 000012C8 BE00                     dw 190
+  2791 000012CA BF00                     dw 191
+  2792 000012CC C000                     dw 192
+  2793 000012CE C100                     dw 193
+  2794 000012D0 C200                     dw 194
+  2795 000012D2 C300                     dw 195
+  2796 000012D4 C400                     dw 196
+  2797 000012D6 C500                     dw 197
+  2798 000012D8 C600                     dw 198
+  2799 000012DA C700                     dw 199
+  2800 000012DC C800                     dw 200
+  2801 000012DE C900                     dw 201
+  2802 000012E0 CA00                     dw 202
+  2803 000012E2 CB00                     dw 203
+  2804 000012E4 CC00                     dw 204
+  2805 000012E6 CD00                     dw 205
+  2806 000012E8 CE00                     dw 206
+  2807 000012EA CF00                     dw 207
+  2808 000012EC D000                     dw 208
+  2809 000012EE D100                     dw 209
+  2810 000012F0 D200                     dw 210
+  2811 000012F2 D300                     dw 211
+  2812 000012F4 D400                     dw 212
+  2813 000012F6 D500                     dw 213
+  2814 000012F8 D600                     dw 214
+  2815 000012FA D700                     dw 215
+  2816 000012FC D800                     dw 216
+  2817 000012FE D900                     dw 217
+  2818 00001300 DA00                     dw 218
+  2819 00001302 DB00                     dw 219
+  2820 00001304 DC00                     dw 220
+  2821 00001306 DD00                     dw 221
+  2822 00001308 DE00                     dw 222
+  2823 0000130A DF00                     dw 223
+  2824 0000130C E000                     dw 224
+  2825 0000130E E100                     dw 225
+  2826 00001310 E200                     dw 226
+  2827 00001312 E300                     dw 227
+  2828 00001314 E400                     dw 228
+  2829 00001316 E500                     dw 229
+  2830 00001318 E600                     dw 230
+  2831 0000131A E700                     dw 231
+  2832 0000131C E800                     dw 232
+  2833 0000131E E900                     dw 233
+  2834 00001320 EA00                     dw 234
+  2835 00001322 EB00                     dw 235
+  2836 00001324 EC00                     dw 236
+  2837 00001326 ED00                     dw 237
+  2838 00001328 EE00                     dw 238
+  2839 0000132A EF00                     dw 239
+  2840 0000132C F000                     dw 240
+  2841 0000132E F100                     dw 241
+  2842 00001330 F200                     dw 242
+  2843 00001332 F300                     dw 243
+  2844 00001334 F400                     dw 244
+  2845 00001336 F500                     dw 245
+  2846 00001338 F600                     dw 246
+  2847 0000133A F700                     dw 247
+  2848 0000133C F800                     dw 248
+  2849 0000133E F900                     dw 249
+  2850 00001340 FA00                     dw 250
+  2851 00001342 FB00                     dw 251
+  2852 00001344 FC00                     dw 252
+  2853 00001346 FD00                     dw 253
+  2854 00001348 FE00                     dw 254
+  2855 0000134A FF00                     dw 255
+  2856 0000134C FF00                     dw 255
+  2857                                  
+  2858 0000134E 0000                    testx dw 0
+  2859 00001350 0000                    testy dw 0
+  2860 00001352 0000                    testz dw 0
+  2861                                  	
+  2862                                  %include  'sin256.inc'
+     1                              <1> sintab:
+     2 00001354 000001020303040506- <1>  db     0,    0,    1,    2,    3,    3,    4,    5,    6,    7,    7,    8,    9,   10,   10,   11 ; 16
+     2 0000135D 070708090A0A0B      <1>
+     3 00001364 0C0D0E0E0F10111112- <1>  db    12,   13,   14,   14,   15,   16,   17,   17,   18,   19,   20,   21,   21,   22,   23,   24 ; 32
+     3 0000136D 13141515161718      <1>
+     4 00001374 18191A1B1B1C1D1E1E- <1>  db    24,   25,   26,   27,   27,   28,   29,   30,   30,   31,   32,   33,   34,   34,   35,   36 ; 48
+     4 0000137D 1F202122222324      <1>
+     5 00001384 252526272828292A2A- <1>  db    37,   37,   38,   39,   40,   40,   41,   42,   42,   43,   44,   45,   45,   46,   47,   48 ; 64
+     5 0000138D 2B2C2D2D2E2F30      <1>
+     6 00001394 303132323334353536- <1>  db    48,   49,   50,   50,   51,   52,   53,   53,   54,   55,   55,   56,   57,   58,   58,   59 ; 80
+     6 0000139D 373738393A3A3B      <1>
+     7 000013A4 3C3C3D3E3E3F404041- <1>  db    60,   60,   61,   62,   62,   63,   64,   64,   65,   66,   66,   67,   68,   68,   69,   70 ; 96
+     7 000013AD 42424344444546      <1>
+     8 000013B4 46474848494A4A4B4B- <1>  db    70,   71,   72,   72,   73,   74,   74,   75,   75,   76,   77,   77,   78,   79,   79,   80 ; 112
+     8 000013BD 4C4D4D4E4F4F50      <1>
+     9 000013C4 505152525353545555- <1>  db    80,   81,   82,   82,   83,   83,   84,   85,   85,   86,   86,   87,   87,   88,   89,   89 ; 128
+     9 000013CD 56565757585959      <1>
+    10 000013D4 5A5A5B5B5C5C5D5D5E- <1>  db    90,   90,   91,   91,   92,   92,   93,   93,   94,   95,   95,   96,   96,   97,   97,   98 ; 144
+    10 000013DD 5F5F6060616162      <1>
+    11 000013E4 626363646465656566- <1>  db    98,   99,   99,  100,  100,  101,  101,  101,  102,  102,  103,  103,  104,  104,  105,  105 ; 160
+    11 000013ED 66676768686969      <1>
+    12 000013F4 6A6A6A6B6B6C6C6C6D- <1>  db   106,  106,  106,  107,  107,  108,  108,  108,  109,  109,  110,  110,  110,  111,  111,  112 ; 176
+    12 000013FD 6D6E6E6E6F6F70      <1>
+    13 00001404 707071717172727273- <1>  db   112,  112,  113,  113,  113,  114,  114,  114,  115,  115,  115,  116,  116,  116,  117,  117 ; 192
+    13 0000140D 73737474747575      <1>
+    14 00001414 757676767677777778- <1>  db   117,  118,  118,  118,  118,  119,  119,  119,  120,  120,  120,  120,  121,  121,  121,  121 ; 208
+    14 0000141D 78787879797979      <1>
+    15 00001424 7A7A7A7A7A7B7B7B7B- <1>  db   122,  122,  122,  122,  122,  123,  123,  123,  123,  123,  124,  124,  124,  124,  124,  124 ; 224
+    15 0000142D 7B7C7C7C7C7C7C      <1>
+    16 00001434 7D7D7D7D7D7D7D7E7E- <1>  db   125,  125,  125,  125,  125,  125,  125,  126,  126,  126,  126,  126,  126,  126,  126,  126 ; 240
+    16 0000143D 7E7E7E7E7E7E7E      <1>
+    17 00001444 7E7E7F7F7F7F7F7F7F- <1>  db   126,  126,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127 ; 256
+    17 0000144D 7F7F7F7F7F7F7F      <1>
+    18                              <1> 
+    19 00001454 7F7F7F7F7F7F7F7F7F- <1>  db   127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  126,  126 ; 272
+    19 0000145D 7F7F7F7F7F7E7E      <1>
+    20 00001464 7E7E7E7E7E7E7E7E7E- <1>  db   126,  126,  126,  126,  126,  126,  126,  126,  126,  125,  125,  125,  125,  125,  125,  125 ; 288
+    20 0000146D 7D7D7D7D7D7D7D      <1>
+    21 00001474 7C7C7C7C7C7C7B7B7B- <1>  db   124,  124,  124,  124,  124,  124,  123,  123,  123,  123,  123,  122,  122,  122,  122,  122 ; 304
+    21 0000147D 7B7B7A7A7A7A7A      <1>
+    22 00001484 797979797878787877- <1>  db   121,  121,  121,  121,  120,  120,  120,  120,  119,  119,  119,  118,  118,  118,  118,  117 ; 320
+    22 0000148D 77777676767675      <1>
+    23 00001494 757574747473737372- <1>  db   117,  117,  116,  116,  116,  115,  115,  115,  114,  114,  114,  113,  113,  113,  112,  112 ; 336
+    23 0000149D 72727171717070      <1>
+    24 000014A4 706F6F6E6E6E6D6D6C- <1>  db   112,  111,  111,  110,  110,  110,  109,  109,  108,  108,  108,  107,  107,  106,  106,  106 ; 352
+    24 000014AD 6C6C6B6B6A6A6A      <1>
+    25 000014B4 696968686767666665- <1>  db   105,  105,  104,  104,  103,  103,  102,  102,  101,  101,  101,  100,  100,   99,   99,   98 ; 368
+    25 000014BD 65656464636362      <1>
+    26 000014C4 62616160605F5F5E5D- <1>  db    98,   97,   97,   96,   96,   95,   95,   94,   93,   93,   92,   92,   91,   91,   90,   90 ; 384
+    26 000014CD 5D5C5C5B5B5A5A      <1>
+    27 000014D4 595958575756565555- <1>  db    89,   89,   88,   87,   87,   86,   86,   85,   85,   84,   83,   83,   82,   82,   81,   80 ; 400
+    27 000014DD 54535352525150      <1>
+    28 000014E4 504F4F4E4D4D4C4B4B- <1>  db    80,   79,   79,   78,   77,   77,   76,   75,   75,   74,   74,   73,   72,   72,   71,   70 ; 416
+    28 000014ED 4A4A4948484746      <1>
+    29 000014F4 464544444342424140- <1>  db    70,   69,   68,   68,   67,   66,   66,   65,   64,   64,   63,   62,   62,   61,   60,   60 ; 432
+    29 000014FD 403F3E3E3D3C3C      <1>
+    30 00001504 3B3A3A393837373635- <1>  db    59,   58,   58,   57,   56,   55,   55,   54,   53,   53,   52,   51,   50,   50,   49,   48 ; 448
+    30 0000150D 35343332323130      <1>
+    31 00001514 302F2E2D2D2C2B2A2A- <1>  db    48,   47,   46,   45,   45,   44,   43,   42,   42,   41,   40,   40,   39,   38,   37,   37 ; 464
+    31 0000151D 29282827262525      <1>
+    32 00001524 2423222221201F1E1E- <1>  db    36,   35,   34,   34,   33,   32,   31,   30,   30,   29,   28,   27,   27,   26,   25,   24 ; 480
+    32 0000152D 1D1C1B1B1A1918      <1>
+    33 00001534 181716151514131211- <1>  db    24,   23,   22,   21,   21,   20,   19,   18,   17,   17,   16,   15,   14,   14,   13,   12 ; 496
+    33 0000153D 11100F0E0E0D0C      <1>
+    34 00001544 0B0A0A090807070605- <1>  db    11,   10,   10,    9,    8,    7,    7,    6,    5,    4,    3,    3,    2,    1,    0,    0 ; 512
+    34 0000154D 04030302010000      <1>
+    35                              <1>  
+    36 00001554 0000FFFEFDFDFCFBFA- <1>  db     0,    0,   -1,   -2,   -3,   -3,   -4,   -5,   -6,   -7,   -7,   -8,   -9,  -10,  -10,  -11 ; 528
+    36 0000155D F9F9F8F7F6F6F5      <1>
+    37 00001564 F4F3F2F2F1F0EFEFEE- <1>  db   -12,  -13,  -14,  -14,  -15,  -16,  -17,  -17,  -18,  -19,  -20,  -21,  -21,  -22,  -23,  -24 ; 544
+    37 0000156D EDECEBEBEAE9E8      <1>
+    38 00001574 E8E7E6E5E5E4E3E2E2- <1>  db   -24,  -25,  -26,  -27,  -27,  -28,  -29,  -30,  -30,  -31,  -32,  -33,  -34,  -34,  -35,  -36 ; 560
+    38 0000157D E1E0DFDEDEDDDC      <1>
+    39 00001584 DBDBDAD9D8D8D7D6D6- <1>  db   -37,  -37,  -38,  -39,  -40,  -40,  -41,  -42,  -42,  -43,  -44,  -45,  -45,  -46,  -47,  -48 ; 576
+    39 0000158D D5D4D3D3D2D1D0      <1>
+    40 00001594 D0CFCECECDCCCBCBCA- <1>  db   -48,  -49,  -50,  -50,  -51,  -52,  -53,  -53,  -54,  -55,  -55,  -56,  -57,  -58,  -58,  -59 ; 592
+    40 0000159D C9C9C8C7C6C6C5      <1>
+    41 000015A4 C4C4C3C2C2C1C0C0BF- <1>  db   -60,  -60,  -61,  -62,  -62,  -63,  -64,  -64,  -65,  -66,  -66,  -67,  -68,  -68,  -69,  -70 ; 608
+    41 000015AD BEBEBDBCBCBBBA      <1>
+    42 000015B4 BAB9B8B8B7B6B6B5B5- <1>  db   -70,  -71,  -72,  -72,  -73,  -74,  -74,  -75,  -75,  -76,  -77,  -77,  -78,  -79,  -79,  -80 ; 624
+    42 000015BD B4B3B3B2B1B1B0      <1>
+    43 000015C4 B0AFAEAEADADACABAB- <1>  db   -80,  -81,  -82,  -82,  -83,  -83,  -84,  -85,  -85,  -86,  -86,  -87,  -87,  -88,  -89,  -89 ; 640
+    43 000015CD AAAAA9A9A8A7A7      <1>
+    44 000015D4 A6A6A5A5A4A4A3A3A2- <1>  db   -90,  -90,  -91,  -91,  -92,  -92,  -93,  -93,  -94,  -95,  -95,  -96,  -96,  -97,  -97,  -98 ; 656
+    44 000015DD A1A1A0A09F9F9E      <1>
+    45 000015E4 9E9D9D9C9C9B9B9B9A- <1>  db   -98,  -99,  -99, -100, -100, -101, -101, -101, -102, -102, -103, -103, -104, -104, -105, -105 ; 672
+    45 000015ED 9A999998989797      <1>
+    46 000015F4 969696959594949493- <1>  db  -106, -106, -106, -107, -107, -108, -108, -108, -109, -109, -110, -110, -110, -111, -111, -112 ; 688
+    46 000015FD 93929292919190      <1>
+    47 00001604 90908F8F8F8E8E8E8D- <1>  db  -112, -112, -113, -113, -113, -114, -114, -114, -115, -115, -115, -116, -116, -116, -117, -117 ; 704
+    47 0000160D 8D8D8C8C8C8B8B      <1>
+    48 00001614 8B8A8A8A8A89898988- <1>  db  -117, -118, -118, -118, -118, -119, -119, -119, -120, -120, -120, -120, -121, -121, -121, -121 ; 720
+    48 0000161D 88888887878787      <1>
+    49 00001624 868686868685858585- <1>  db  -122, -122, -122, -122, -122, -123, -123, -123, -123, -123, -124, -124, -124, -124, -124, -124 ; 736
+    49 0000162D 85848484848484      <1>
+    50 00001634 838383838383838282- <1>  db  -125, -125, -125, -125, -125, -125, -125, -126, -126, -126, -126, -126, -126, -126, -126, -126 ; 752
+    50 0000163D 82828282828282      <1>
+    51 00001644 828281818181818181- <1>  db  -126, -126, -127, -127, -127, -127, -127, -127, -127, -127, -127, -127, -127, -127, -127, -127 ; 768
+    51 0000164D 81818181818181      <1>
+    52                              <1>  
+    53 00001654 818181818181818181- <1>  db  -127, -127, -127, -127, -127, -127, -127, -127, -127, -127, -127, -127, -127, -127, -126, -126 ; 784
+    53 0000165D 81818181818282      <1>
+    54 00001664 828282828282828282- <1>  db  -126, -126, -126, -126, -126, -126, -126, -126, -126, -125, -125, -125, -125, -125, -125, -125 ; 800
+    54 0000166D 83838383838383      <1>
+    55 00001674 848484848484858585- <1>  db  -124, -124, -124, -124, -124, -124, -123, -123, -123, -123, -123, -122, -122, -122, -122, -122 ; 816
+    55 0000167D 85858686868686      <1>
+    56 00001684 878787878888888889- <1>  db  -121, -121, -121, -121, -120, -120, -120, -120, -119, -119, -119, -118, -118, -118, -118, -117 ; 832
+    56 0000168D 89898A8A8A8A8B      <1>
+    57 00001694 8B8B8C8C8C8D8D8D8E- <1>  db  -117, -117, -116, -116, -116, -115, -115, -115, -114, -114, -114, -113, -113, -113, -112, -112 ; 848
+    57 0000169D 8E8E8F8F8F9090      <1>
+    58 000016A4 909191929292939394- <1>  db  -112, -111, -111, -110, -110, -110, -109, -109, -108, -108, -108, -107, -107, -106, -106, -106 ; 864
+    58 000016AD 94949595969696      <1>
+    59 000016B4 9797989899999A9A9B- <1>  db  -105, -105, -104, -104, -103, -103, -102, -102, -101, -101, -101, -100, -100,  -99,  -99,  -98 ; 880
+    59 000016BD 9B9B9C9C9D9D9E      <1>
+    60 000016C4 9E9F9FA0A0A1A1A2A3- <1>  db   -98,  -97,  -97,  -96,  -96,  -95,  -95,  -94,  -93,  -93,  -92,  -92,  -91,  -91,  -90,  -90 ; 896
+    60 000016CD A3A4A4A5A5A6A6      <1>
+    61 000016D4 A7A7A8A9A9AAAAABAB- <1>  db   -89,  -89,  -88,  -87,  -87,  -86,  -86,  -85,  -85,  -84,  -83,  -83,  -82,  -82,  -81,  -80 ; 912
+    61 000016DD ACADADAEAEAFB0      <1>
+    62 000016E4 B0B1B1B2B3B3B4B5B5- <1>  db   -80,  -79,  -79,  -78,  -77,  -77,  -76,  -75,  -75,  -74,  -74,  -73,  -72,  -72,  -71,  -70 ; 928
+    62 000016ED B6B6B7B8B8B9BA      <1>
+    63 000016F4 BABBBCBCBDBEBEBFC0- <1>  db   -70,  -69,  -68,  -68,  -67,  -66,  -66,  -65,  -64,  -64,  -63,  -62,  -62,  -61,  -60,  -60 ; 944
+    63 000016FD C0C1C2C2C3C4C4      <1>
+    64 00001704 C5C6C6C7C8C9C9CACB- <1>  db   -59,  -58,  -58,  -57,  -56,  -55,  -55,  -54,  -53,  -53,  -52,  -51,  -50,  -50,  -49,  -48 ; 960
+    64 0000170D CBCCCDCECECFD0      <1>
+    65 00001714 D0D1D2D3D3D4D5D6D6- <1>  db   -48,  -47,  -46,  -45,  -45,  -44,  -43,  -42,  -42,  -41,  -40,  -40,  -39,  -38,  -37,  -37 ; 976
+    65 0000171D D7D8D8D9DADBDB      <1>
+    66 00001724 DCDDDEDEDFE0E1E2E2- <1>  db   -36,  -35,  -34,  -34,  -33,  -32,  -31,  -30,  -30,  -29,  -28,  -27,  -27,  -26,  -25,  -24 ; 992
+    66 0000172D E3E4E5E5E6E7E8      <1>
+    67 00001734 E8E9EAEBEBECEDEEEF- <1>  db   -24,  -23,  -22,  -21,  -21,  -20,  -19,  -18,  -17,  -17,  -16,  -15,  -14,  -14,  -13,  -12 ; 1008
+    67 0000173D EFF0F1F2F2F3F4      <1>
+    68 00001744 F5F6F6F7F8F9F9FAFB- <1>  db   -11,  -10,  -10,   -9,   -8,   -7,   -7,   -6,   -5,   -4,   -3,   -3,   -2,   -1,    0,    0 ; 1024
+    68 0000174D FCFDFDFEFF0000      <1>
+  2863                                  
+  2864                                  section .bss 	; put uninitialized data here
+  2865 00000000 <res 194h>              BackBufferTable: 	resw 202 	; 200 screen lines as words
+  2866 00000194 <res 8000h>             BackBuffer: 		resw 16384	; 2 screen buffers
+  2867                                  
+  2868                                  
+  2869                                  ObjectPointsResults:
+  2870 00008194 <res 100h>              ObjectYPos:	resw	128 ; 128 words - xpos
+  2871 00008294 <res 100h>              ObjectXPos:	resw	128 ; 128 words - ypos
+  2872 00008394 <res 100h>              ObjectClipCode:	resw	128 ; 128 words - clip codes
+  2873 00008494 <res 100h>              ObjectXRot:	resw	128 ; 128 words - x rotated points
+  2874 00008594 <res 100h>              ObjectYRot:	resw	128 ; 128 words - y rotated points
+  2875 00008694 <res 100h>              ObjectZRot:	resw	128 ; 128 words - z rotated points
+  2876                                  
+  2877 00008794 ????                    SinX:		resw	1
+  2878 00008796 ????                    CosX:	resw	1
+  2879 00008798 ????                    SinY:		resw	1
+  2880 0000879A ????                    CosY:	resw	1
+  2881 0000879C ????                    SinZ:		resw	1
+  2882 0000879E ????                    CosZ:	resw	1
+  2883                                  
+  2884 000087A0 ????                    XST		resw	1
+  2885 000087A2 ????                    YST		resw	1
+  2886 000087A4 ????                    XEN		resw	1
+  2887 000087A6 ????                    YEN		resw	1
+  2888 000087A8 ??                      CCST	resb	1
+  2889 000087A9 ??                      CCEN	resb	1
+  2890                                  
+  2891 000087AA ????                    XAngle:	resw	1
+  2892 000087AC ????                    YAngle:	resw	1
+  2893 000087AE ????                    ZAngle:	resw	1
+  2894                                  
+  2895 000087B0 ??                      Exit:	resb	1
+  2896                                  
+  2897 000087B1 ????                    STX:		resw	1
+  2898 000087B3 ????                    STY:		resw	1
+  2899 000087B5 ????                    STZ:		resw	1
+  2900 000087B7 ????                    ENX:		resw	1
+  2901 000087B9 ????                    ENY:		resw	1
+  2902 000087BB ????                    ENZ:		resw	1
+  2903                                  
+  2904 000087BD ????                    Test0: 	resw	1
+  2905 000087BF ????                    Test1: 	resw	1
+  2906 000087C1 ????                    Test2: 	resw	1
+  2907 000087C3 ????                    Test3: 	resw	1
+  2908 000087C5 ????                    Test4: 	resw	1
+  2909 000087C7 ????                    Test5: 	resw	1
+  2910 000087C9 ????                    Test6: 	resw	1
+  2911 000087CB ????                    Test7: 	resw	1
+  2912 000087CD ????                    Test8: 	resw	1
+  2913 000087CF ????                    Test9: 	resw	1
+  2914                                  
+  2915 000087D1 ????                    BackBufferSeg	resw	1	; pointer to the segment containing the back buffer
