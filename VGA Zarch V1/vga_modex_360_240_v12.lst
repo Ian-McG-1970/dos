@@ -1,0 +1,895 @@
+     1                                  ; todo - page flipping
+     2                                  
+     3                                  ; nasm vga3d_v16.asm -o vga3d.com -f bin
+     4                                  
+     5                                  VIDEO_SEGMENT	equ	0A000h 	; display memory segment for true CGA graphics modes
+     6                                  
+     7                                  VIDEO_SEGMENT_PAGE_0 equ VIDEO_SEGMENT
+     8                                  VIDEO_SEGMENT_PAGE_1 equ VIDEO_SEGMENT_PAGE_0 + (SCREEN_SIZE/16)
+     9                                  
+    10                                  LINE_SIZE_IN_BYTES equ 360
+    11                                  SCREEN_WIDTH_360 equ LINE_SIZE_IN_BYTES/4
+    12                                  
+    13                                  SCREEN_SIZE_IN_BYTES equ 360*240
+    14                                  SCREEN_SIZE equ SCREEN_SIZE_IN_BYTES/4
+    15                                  SCREEN_SIZE_DWORDS equ SCREEN_SIZE/4
+    16                                  
+    17                                  INPUT_STATUS_1	equ	03dah	; VGA status register
+    18                                  VSYNC_MASK	equ	08h	; vertical sync bit in status register 1
+    19                                  DE_MASK		equ	01h	; display enable bit in status register 1
+    20                                  
+    21                                  HIGH_ADDRESS equ 0Ch
+    22                                  LOW_ADDRESS  equ 0Dh
+    23                                  
+    24                                  MAP_MASK	equ	2		; SC map mask register
+    25                                  SC_INDEX		equ	3c4h	; SC index register
+    26                                  CRTC_INDEX equ 03d4h
+    27                                  
+    28                                  KEY_1	EQU	0231h
+    29                                  KEY_2	EQU	0332h
+    30                                  KEY_3	EQU	0433h
+    31                                  KEY_4 	EQU	0534h
+    32                                  KEY_5 	EQU	0635h
+    33                                  KEY_6 	EQU	0736h
+    34                                  KEY_ESC	EQU 	27
+    35                                  
+    36                                  CPU 486
+    37                                  bits 16
+    38                                  org 100h
+    39                                  
+    40                                  section .text
+    41                                  
+    42                                  start:	
+    43 00000000 E84A01                  		call	Mode360x240
+    44                                  
+    45 00000003 31C0                    	xor	ax,ax
+    46 00000005 A3[800C]                	mov	[ScreenBuffer],ax
+    47 00000008 B800A0                  	mov	ax,VIDEO_SEGMENT
+    48 0000000B A3[820C]                	mov	[ScreenBufferSeg],ax
+    49                                  
+    50 0000000E BAC403                  	mov     dx, SC_INDEX
+    51 00000011 B802FF                  	mov 	ax,0ff02h ; 002ffh
+    52 00000014 EF                      	out     dx, ax		; 2. Put the CHAIN4-mode of Sequencer off
+    53                                  
+    54 00000015 8B1E[820C]              	mov bx,[ScreenBufferSeg]
+    55 00000019 8EC3                    	mov	es,bx
+    56                                  
+    57 0000001B FC                      	cld
+    58                                  
+    59 0000001C 66B822222222            	mov	eax,022222222h
+    60 00000022 6631FF                  	xor	edi,edi
+    61 00000025 66B918150000            	mov	ecx,SCREEN_SIZE/4
+    62 0000002B F366AB                  	rep	stosd ; write eax to es:di
+    63                                  
+    64 0000002E 66B833333333            	mov	eax,033333333h
+    65 00000034 66BF60540000            	mov	edi,SCREEN_SIZE
+    66 0000003A 66B918150000            	mov	ecx,SCREEN_SIZE/4
+    67 00000040 F366AB                  	rep	stosd ; write eax to es:di
+    68                                  	
+    69                                  MainLoop:
+    70 00000043 E84A00                  		call	WaitVSync ; Wait for vertical sync so the new start address has a chance to take effect.
+    71                                  		 
+    72 00000046 B303                    		mov		bl,3
+    73 00000048 B82301                  		mov		ax,0123h
+    74 0000004B E8C303                  		call	Hex16
+    75                                  
+    76 0000004E B305                    		mov		bl,5
+    77 00000050 B86745                  		mov		ax,4567h
+    78 00000053 E8BB03                  		call	Hex16
+    79                                  
+    80 00000056 B307                    		mov		bl,7
+    81 00000058 B8AB89                  		mov		ax,089abh
+    82 0000005B E8B303                  		call	Hex16
+    83                                  
+    84 0000005E B309                    		mov		bl,9
+    85 00000060 B8EFCD                  		mov		ax,0cdefh
+    86 00000063 E8AB03                  		call	Hex16
+    87                                  
+    88 00000066 B30B                    		mov		bl,11
+    89 00000068 A1[800C]                		mov		ax,[ScreenBuffer]
+    90 0000006B E8A303                  		call	Hex16
+    91                                  
+    92 0000006E B90300                  	mov	cx,3
+    93 00000071 E85501                  	call	Move
+    94                                  	
+    95 00000074 B90300                  	mov	cx,3
+    96 00000077 E8BC01                  	call	Plots
+    97                                  		
+    98 0000007A B014                    	mov	al,20 ; 100
+    99 0000007C B90300                  	mov	cx,3
+   100 0000007F E8CC01                  	call	Fill
+   101                                  
+   102 00000082 E88C00                  		call	GetKey
+   103 00000085 73BC                    	jnc		MainLoop
+   104                                  
+   105                                  Done: ; Finished, clear key, reset screen mode and exit.
+   106 00000087 B80300                  	mov	ax,3		; reset to text mode
+   107 0000008A CD10                    	int		10h
+   108                                  	
+   109 0000008C B44C                    	mov	ah,4ch	; exit to DOS
+   110 0000008E CD21                    	int		21h
+   111                                  
+   112                                  ; Wait for the leading edge of vertical sync pulse.
+   113                                  ;
+   114                                  ;WaitVSync	proc	near
+   115                                  ;	mov	dx,INPUT_STATUS_1
+   116                                  ;WaitNotVSyncLoop:
+   117                                  ;	in	al,dx
+   118                                  ;	and	al,VSYNC_MASK
+   119                                  ;	jnz	WaitNotVSyncLoop
+   120                                  ;WaitVSyncLoop:
+   121                                  ;	in	al,dx
+   122                                  ;	and	al,VSYNC_MASK
+   123                                  ;	jz	WaitVSyncLoop
+   124                                  ;	ret
+   125                                  ;WaitVSync	endp
+   126                                  
+   127                                  ;/* Wait until we're not in vertical sync, so we can catch leading edge */
+   128                                  ;      while ((inp(INPUT_STATUS_1) & 0x08) != 0) ;
+   129                                  ;      /* Wait until we are in vertical sync */
+   130                                  ;      while ((inp(INPUT_STATUS_1) & 0x08) == 0) ;
+   131                                  
+   132                                  ; When the offset registers are changed, the page flip does not occur until the end of the next vertical retrace. So after the page is flipped, the program should wait until the end of the vertical retrace before drawing to the non-visible page.
+   133                                  
+   134                                  WaitVSync: ; Wait for the leading edge of vertical sync pulse.
+   135                                  
+   136 00000090 BADA03                  				mov	dx,INPUT_STATUS_1
+   137 00000093 EC                      WaitNotVSyncLoop:		in		al,dx
+   138 00000094 2408                    					and	al,VSYNC_MASK 	; is bit 3 clear so its not in the vertical retrace?
+   139 00000096 75FB                    					jnz		WaitNotVSyncLoop 	; no its set
+   140                                  
+   141                                  ;				mov	dx,INPUT_STATUS_1
+   142 00000098 EC                      WaitVSyncLoop:	in	al,dx
+   143 00000099 2408                    					and	al,VSYNC_MASK 	; is bit 3 set so its in the vertical retrace?;
+   144 0000009B 74FB                    					jz	WaitVSyncLoop 	; no its clear
+   145                                  
+   146 0000009D 8B0E[800C]              	mov 	cx,[ScreenBuffer]
+   147 000000A1 85C9                    	test	cx,cx
+   148 000000A3 7538                    	jnz		.page1
+   149                                  
+   150                                  .page0:
+   151 000000A5 BB6054                  	mov bx,SCREEN_SIZE
+   152 000000A8 BAD403                  			mov dx, CRTC_INDEX
+   153 000000AB B00D                    			mov al, LOW_ADDRESS
+   154 000000AD 88DC                    			mov ah,bl
+   155 000000AF EF                      			out dx,ax
+   156 000000B0 B00C                    			mov al, HIGH_ADDRESS
+   157 000000B2 88FC                    			mov ah,bh
+   158 000000B4 EF                      			out dx,ax
+   159                                  
+   160 000000B5 66BF60540000            	mov edi,SCREEN_SIZE
+   161 000000BB 893E[800C]              			mov [ScreenBuffer],di
+   162                                  ;	mov	ax,VIDEO_SEGMENT_PAGE_1
+   163                                  ;	mov	[ScreenBufferSeg],ax
+   164                                  
+   165 000000BF BAC403                  			mov     dx, SC_INDEX
+   166 000000C2 B802FF                  			mov 	ax, 0ff02h 
+   167 000000C5 EF                      			out     dx, ax		
+   168                                  
+   169 000000C6 8B1E[820C]              			mov	bx,[ScreenBufferSeg]
+   170 000000CA 8EC3                    			mov	es,bx
+   171                                  
+   172 000000CC FC                      			cld
+   173 000000CD 66B800000000            			mov	eax,0
+   174 000000D3 66B918150000            			mov	ecx,SCREEN_SIZE/4
+   175 000000D9 F366AB                  			rep	stosd
+   176                                  		
+   177 000000DC C3                      			ret
+   178                                  
+   179                                  .page1:
+   180 000000DD 31DB                    	xor	bx,bx
+   181 000000DF BAD403                  		mov dx, CRTC_INDEX
+   182 000000E2 B00D                    		mov al, LOW_ADDRESS
+   183 000000E4 88DC                    		mov ah,bl
+   184 000000E6 EF                      		out dx,ax
+   185 000000E7 B00C                    		mov al, HIGH_ADDRESS
+   186 000000E9 88FC                    		mov ah,bh
+   187 000000EB EF                      		out dx,ax
+   188                                  
+   189 000000EC 6631FF                  	xor	edi,edi
+   190 000000EF 893E[800C]              		mov [ScreenBuffer],di
+   191                                  ;	mov	ax,VIDEO_SEGMENT_PAGE_0
+   192                                  ;	mov	[ScreenBufferSeg],ax
+   193                                  
+   194 000000F3 BAC403                  		mov     dx, SC_INDEX
+   195 000000F6 B802FF                  		mov 	ax, 0ff02h 
+   196 000000F9 EF                      		out     dx, ax		
+   197                                  
+   198 000000FA 8B1E[820C]              		mov	bx,[ScreenBufferSeg]
+   199 000000FE 8EC3                    		mov	es,bx
+   200                                  
+   201 00000100 FC                      		cld
+   202 00000101 66B800000000            		mov	eax,0
+   203 00000107 66B918150000            		mov	ecx,SCREEN_SIZE/4
+   204 0000010D F366AB                  		rep	stosd ; write eax to es:di
+   205                                  
+   206 00000110 C3                      .cont	ret
+   207                                  
+   208                                  GetKey:
+   209 00000111 B411                    	mov	ah,11h
+   210 00000113 CD16                    	int	16h         	; has a key been pressed
+   211 00000115 7426                    	jz	.key_none ; no
+   212 00000117 B410                    	mov	ah,10h      ; yes 
+   213 00000119 CD16                    	int	16h         	; get it in AX (al= ascii, ah=scan code)
+   214 0000011B 3C1B                    	cmp	al,KEY_ESC
+   215 0000011D 7420                    	je	.key_esc
+   216 0000011F 3D3102                  	cmp 	ax,KEY_1
+   217 00000122 741D                    	je 	.key_1
+   218 00000124 3D3203                  	cmp 	ax,KEY_2
+   219 00000127 741A                    	je 	.key_2
+   220 00000129 3D3304                  	cmp 	ax,KEY_3
+   221 0000012C 7417                    	je 	.key_3
+   222 0000012E 3D3405                  	cmp 	ax,KEY_4
+   223 00000131 7414                    	je 	.key_4
+   224 00000133 3D3506                  	cmp 	ax,KEY_5
+   225 00000136 7411                    	je 	.key_5
+   226 00000138 3D3607                  	cmp 	ax,KEY_6
+   227 0000013B 740E                    	je 	.key_6
+   228                                  .key_none:
+   229 0000013D F8                      	clc
+   230 0000013E C3                      	ret
+   231                                  .key_esc:
+   232 0000013F F9                      	stc
+   233 00000140 C3                      	ret
+   234                                  .key_1:
+   235 00000141 F8                      	clc
+   236 00000142 C3                      	ret
+   237                                  .key_2:
+   238 00000143 F8                      	clc
+   239 00000144 C3                      	ret
+   240                                  .key_3:
+   241 00000145 F8                      	clc
+   242 00000146 C3                      	ret
+   243                                  .key_4:
+   244 00000147 F8                      	clc
+   245 00000148 C3                      	ret
+   246                                  .key_5:
+   247 00000149 F8                      	clc
+   248 0000014A C3                      	ret
+   249                                  .key_6:
+   250 0000014B F8                      	clc
+   251 0000014C C3                      	ret
+   252                                  
+   253                                  Mode360x240:
+   254 0000014D B81200                  		mov    ax,12h
+   255 00000150 CD10                    		int    10h          ; mode 12h to supposedly let the BIOS clear the video memory
+   256                                  
+   257 00000152 B81300                  		mov     ax, 0013h	; 1. Set the BIOS mode 13h, which is the standard 256-color mode.
+   258 00000155 CD10                            int     10h
+   259                                    		
+   260 00000157 BAC403                          mov     dx, SC_INDEX
+   261 0000015A B80406                          mov     ax, 0604h
+   262 0000015D EF                              out     dx, ax		; 2. Put the CHAIN4-mode of Sequencer off
+   263                                    
+   264 0000015E B8020F                          mov     ax, 0F02h
+   265 00000161 EF                              out     dx, ax
+   266 00000162 BA00A0                          mov     dx, VIDEO_SEGMENT
+   267 00000165 8EC2                            mov     es, dx
+   268 00000167 31FF                            xor     di, di
+   269 00000169 31C0                            xor     ax, ax
+   270 0000016B B90080                          mov     cx, 8000h
+   271 0000016E F3AB                            rep     stosw		; 3. Clear the video memory (setting mode 13h clears only every fourth byte from each plane)
+   272                                   
+   273 00000170 BAD403                          mov     dx, 03D4h
+   274 00000173 B81400                          mov     ax, 0014h
+   275 00000176 EF                              out     dx, ax		; 4. Turn off the CRTC's LONG-mode
+   276                                    
+   277 00000177 B817E3                          mov     ax, 0E317h
+   278 0000017A EF                              out     dx, ax		; 5. Turn on the CRTC's BYTE-mode
+   279                                  	
+   280                                  
+   281 0000017B B8112C                  		mov		ax,	02c11h	; word_out(CRTC_INDEX, V_RETRACE_END, 0x2c); 0x11
+   282 0000017E EF                      		out		dx,	ax
+   283                                  		
+   284 0000017F BA2C03                          mov     dx, 032ch
+   285 00000182 B0E7                    		mov		al,	0e7h		;    outp(MISC_OUTPUT, 0xe7);
+   286 00000184 EE                      		out		dx,al
+   287                                  
+   288 00000185 BAD403                          mov     dx, 003D4h
+   289 00000188 B86B00                  		mov		ax,	0006bh
+   290 0000018B EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_TOTAL, 0x6b); 0x00
+   291                                  
+   292 0000018C B80159                  		mov		ax, 05901h	
+   293 0000018F EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_DISPLAY_END, 0x59); 0x01
+   294                                  
+   295 00000190 B8025A                  		mov		ax,05a02h	
+   296 00000193 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_BLANK_START, 0x5a); 0x02
+   297                                  
+   298 00000194 B8038E                  		mov		ax,08e03h	
+   299 00000197 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_BLANK_END, 0x8e); 0x03
+   300                                  
+   301 00000198 B8045E                  		mov		ax,05e04h	
+   302 0000019B EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_RETRACE_START, 0x5e); 0x04
+   303                                  
+   304 0000019C B8058A                  		mov		ax,08a05h
+   305 0000019F EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_RETRACE_END, 0x8a); 0x05
+   306                                  
+   307 000001A0 B8132D                  		mov		ax,02d13h
+   308 000001A3 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, OFFSET, 0x2d); 0x13
+   309                                  
+   310 000001A4 B8118E                  		mov		ax,08e11h
+   311 000001A7 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_RETRACE_END, 0x8e); ; 0x11 set vertical retrace back to normal */
+   312                                  
+   313 000001A8 B8112C                  		mov		ax,02c11h	
+   314 000001AB EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_RETRACE_END, 0x2c); ; 0x11
+   315                                  
+   316 000001AC B8060D                  		mov		ax,0d06h	
+   317 000001AF EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_TOTAL, 0x0d); 0x06
+   318                                  
+   319 000001B0 B8073E                  		mov		ax,03e07h	
+   320 000001B3 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, OVERFLOW, 0x3e); 0x07
+   321                                  
+   322 000001B4 B810EA                  		mov		ax,0ea10h	
+   323 000001B7 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_RETRACE_START, 0xea); 0x10
+   324                                  
+   325 000001B8 B811AC                  		mov		ax,0ac11h	
+   326 000001BB EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_RETRACE_END, 0xac); 0x11
+   327                                  
+   328 000001BC B812DF                  		mov		ax,0df12h	
+   329 000001BF EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_DISPLAY_END, 0xdf); 0x12
+   330                                  
+   331 000001C0 B815E7                  		mov		ax,0e715h	
+   332 000001C3 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_BLANK_START, 0xe7); 0x15
+   333                                  
+   334 000001C4 B81606                  		mov		ax,0616h	
+   335 000001C7 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_BLANK_END, 0x06); 0x16
+   336 000001C8 C3                      		ret
+   337                                  
+   338                                  	
+   339                                  
+   340 000001C9 8D36[2003]              Move:	lea 	si,[PointList]
+   341 000001CD 8D3E[4003]              		lea	di,[DirList]
+   342                                   
+   343 000001D1 8B04                    .loop		mov	ax,[si]
+   344 000001D3 8B5C02                  		mov	bx,[si+2]
+   345 000001D6 8B15                    		mov	dx,[di]
+   346 000001D8 8B6D02                  		mov	bp,[di+2]
+   347 000001DB 01D0                    		add	ax,dx
+   348 000001DD 01EB                    		add	bx,bp
+   349 000001DF 8904                    		mov	[si],ax
+   350 000001E1 895C02                  		mov	[si+2],bx
+   351                                  
+   352 000001E4 83F800                  		cmp 	ax,0
+   353 000001E7 7502                    		jne 	.testxl
+   354 000001E9 F7DA                    			neg 	dx
+   355 000001EB 83FB00                  .testxl		cmp 	bx,0
+   356 000001EE 7502                    		jne 	.testyl
+   357 000001F0 F7DD                    			neg 	bp
+   358 000001F2 3DEF00                  .testyl		cmp 	ax,239
+   359 000001F5 7502                    		jne 	.testxr
+   360 000001F7 F7DA                    			neg 	dx
+   361 000001F9 81FB6701                .testxr		cmp 	bx,359
+   362 000001FD 7502                    		jne 	.testyr
+   363 000001FF F7DD                    			neg 	bp
+   364 00000201 8915                    .testyr		mov 	[di],dx
+   365 00000203 896D02                  		mov	[di+2],bp
+   366                                   
+   367 00000206 83C604                  		add	si,4
+   368 00000209 83C704                  		add	di,4
+   369 0000020C 49                      		dec	cx
+   370 0000020D 75C2                    		jne	.loop
+   371 0000020F C3                      	ret
+   372                                  
+   373                                  Plot:	; bp=v / bx=h / ch=col
+   374                                  
+   375 00000210 8B16[820C]              	mov dx,[ScreenBufferSeg]
+   376 00000214 8EC2                    	mov es,dx
+   377                                  
+   378 00000216 88D9                    	mov		cl,	bl	; backup
+   379 00000218 C1EB02                  	shr		bx,	2	; /4
+   380 0000021B 01ED                    	add		bp,	bp 	; start ver *2
+   381 0000021D 039E[0000]              	add		bx,	[BackBufferTable360+bp]	; ver start
+   382 00000221 031E[800C]              	add		bx, [ScreenBuffer]
+   383                                  
+   384 00000225 B401                    	mov		ah,	1 ; move ax,0102h
+   385 00000227 80E103                  	and 	cl,	3
+   386 0000022A D2E4                    	shl		ah,	cl
+   387 0000022C B002                    	mov		al,	02h ; not needed if above implemented?
+   388 0000022E BAC403                  	mov     dx, SC_INDEX
+   389 00000231 EF                      	out     dx, ax		; 2. Put the CHAIN4-mode of Sequencer off
+   390                                  	
+   391 00000232 26882F                  	mov		[es:bx],ch
+   392 00000235 C3                      	ret
+   393                                  
+   394 00000236 8D36[2003]              Plots:	lea 	si,[PointList]
+   395                                   
+   396 0000023A 51                      .loop	push	cx
+   397 0000023B 8B2C                    		mov	bp,[si]
+   398 0000023D 8B5C02                  		mov	bx,[si+2]
+   399 00000240 B566                    		mov		ch,66h
+   400 00000242 E8CBFF                  		call 	Plot
+   401 00000245 59                      		pop		cx
+   402                                   
+   403 00000246 83C604                  		add	si,4
+   404 00000249 FEC9                    		dec	cl
+   405 0000024B 75ED                    		jne	.loop
+   406 0000024D C3                      	ret
+   407                                  
+   408 0000024E A2[840C]                Fill:	mov	[Colour],al		; backup colour
+   409                                  	
+   410 00000251 8D36[2003]              	lea	si,[PointList]		; point list
+   411 00000255 89CB                    	mov	bx,cx			; points
+   412 00000257 C1E302                  	shl	bx,2			; copy first point to last point
+   413 0000025A 668B2C                  	mov	ebp,[si]			; get start xy words
+   414 0000025D 668928                  	mov	[si+bx],ebp		; put xy words to end
+   415                                  
+   416 00000260 BBFF00                  	mov	bx,000ffh		; set lowest and highest
+   417                                  
+   418 00000263 51                      .point_loop	push	cx
+   419                                  
+   420 00000264 8B04                    		mov	ax,[si]		; vstart
+   421 00000266 8B6C02                  		mov	bp,[si+2]	; hstart
+   422 00000269 8B4C04                  		mov	cx,[si+4]	; vend
+   423 0000026C 8B5406                  		mov	dx,[si+6]	; hend
+   424                                  
+   425 0000026F 8D3E[0000]              		lea	di,[EdgeTable]	; get edge table start - default left edge
+   426 00000273 39C8                    		cmp 	ax,cx 		; compare vstart vend
+   427 00000275 7447                    		jz 	.next 		; if same ignore
+   428 00000277 7206                    		jc	.noswap
+   429 00000279 91                      			xchg 	ax,cx 		; swap vstart vend
+   430 0000027A 87EA                    			xchg 	bp,dx 		; swap hstart hend
+   431 0000027C 83C704                  			add	di,4		; add 4 for right edge
+   432                                  
+   433 0000027F 38C3                    .noswap:		cmp 	bl,al 	; smallest xpos
+   434 00000281 7202                    		jc 	.low
+   435 00000283 88C3                    			mov 	bl,al 	; yes
+   436                                  
+   437 00000285 38CF                    .low:		cmp 	bh,cl	; biggest xpos
+   438 00000287 7302                    		jnc 	.high
+   439 00000289 88CF                    			mov	bh,cl 	; yes
+   440                                  
+   441 0000028B 29C1                    .high		sub	cx,ax		; vdiff
+   442                                  
+   443 0000028D C1E003                  		shl	ax,3		; *8
+   444 00000290 01C7                    		add	di,ax		; added to di
+   445                                  	
+   446 00000292 8EEA                    		mov	gs,dx		; negate set to positive
+   447 00000294 29EA                    		sub	dx,bp		; hdiff
+   448                                  
+   449 00000296 66C1E510                .positive	shl	ebp,16		; hstart *65536
+   450 0000029A 89D0                    		mov	ax,dx		; hdiff
+   451 0000029C 660FBFC0                		movsx	eax,ax
+   452 000002A0 660FBFC9                		movsx	ecx,cx
+   453 000002A4 6699                    		CDQ
+   454 000002A6 66C1E009                		shl	eax,9		; shift left ax 9 times
+   455 000002AA 66F7F9                  		idiv	ecx		; divide dx:ax by cx
+   456 000002AD 66C1E007                		shl	eax,7		; shift result left 7 times so becomes 16:16
+   457                                  
+   458 000002B1 66892D                  .edge_loop		mov	[di],ebp		; store hstart = temp
+   459 000002B4 6601C5                  			add	ebp,eax
+   460 000002B7 83C708                  			add	di,8
+   461 000002BA FEC9                    			dec	cl
+   462 000002BC 75F3                    			jnz	.edge_loop
+   463                                  
+   464                                  
+   465 000002BE 83C604                  .next		add	si,4
+   466 000002C1 59                      		pop	cx
+   467 000002C2 FEC9                    		dec	cl
+   468 000002C4 759D                    		jnz	.point_loop
+   469                                  
+   470                                  ; ret
+   471                                   
+   472 000002C6 28DF                    	sub	bh,bl			; end - start
+   473 000002C8 7278                    	jc	.exit			; all on same line?
+   474 000002CA 88FA                    	mov	dl,bh
+   475 000002CC 30FF                    	xor	bh,bh
+   476                                  
+   477 000002CE A0[840C]                	mov	al,[Colour]
+   478 000002D1 88C4                     mov ah,al
+   479 000002D3 66C1E008                 shl eax,8
+   480 000002D7 88E0                     mov al,ah
+   481 000002D9 66C1E008                 shl eax,8
+   482 000002DD 88E0                     mov al,ah
+   483                                  
+   484 000002DF 89D9                     mov	cx,bx ; plot temp
+   485                                  
+   486 000002E1 01DB                    	add	bx,bx 			; start ver *2
+   487 000002E3 8BB7[0000]              	mov	si,[BackBufferTable360+bx]	; start of ver line
+   488 000002E7 C1E302                  	shl	bx,2			; start ver *4*8
+   489 000002EA 8DAF[0200]              	lea	bp,[EdgeTable+bx+2]	; point to first 
+   490                                  
+   491 000002EE 89CB                     mov	bx,cx ; plot temp
+   492                                  
+   493 000002F0 8B4E00                  .plotloop	mov	cx,[bp]
+   494 000002F3 8B7E04                  			mov	di,[bp+4]
+   495                                  
+   496 000002F6 52                       push dx
+   497 000002F7 55                       push bp
+   498                                  
+   499 000002F8 53                      	push bx
+   500 000002F9 51                      	push cx
+   501 000002FA 89DD                    		mov	bp,bx
+   502 000002FC 89FB                    		mov	bx,di
+   503 000002FE B566                    		mov		ch,66h
+   504 00000300 E80DFF                  		call 	Plot
+   505 00000303 59                      	pop cx
+   506 00000304 5B                      	pop bx
+   507                                  
+   508 00000305 53                      	push bx
+   509 00000306 51                      	push cx
+   510 00000307 89DD                    		mov	bp,bx
+   511 00000309 89CB                    		mov	bx,cx
+   512 0000030B B566                    		mov		ch,66h
+   513 0000030D E800FF                  		call 	Plot
+   514 00000310 59                      	pop cx
+   515 00000311 5B                      	pop bx
+   516                                   
+   517 00000312 5D                       pop bp
+   518 00000313 5A                       pop dx
+   519                                   
+   520 00000314 43                       inc bx	; plot temp
+   521                                  
+   522 00000315 83C508                  		add	bp,8
+   523 00000318 FECA                    		dec	dl
+   524 0000031A 75D4                    		jnz	.plotloop
+   525                                  
+   526 0000031C C3                      		ret
+   527                                  
+   528 0000031D 8B4E00                  .loop		mov	cx,[bp]
+   529 00000320 8B7E04                  		mov	di,[bp+4]
+   530                                  
+   531 00000323 39F9                    		cmp	cx,di
+   532 00000325 7302                    		jnc	.no_swap
+   533 00000327 87CF                    			xchg 	cx, di
+   534 00000329 29F9                    .no_swap		sub	cx,di		; subtract start from end
+   535 0000032B 01F7                    		add	di,si		; add start screen pos to di
+   536                                  
+   537 0000032D 89CB                     mov bx,cx ; start
+   538 0000032F 83E103                   and cx,3
+   539                                  ;;;; rep stosb
+   540 00000332 89D9                     mov cx,bx
+   541 00000334 C1E902                   shr cx,2
+   542                                  ;;;; rep stosd
+   543                                  
+   544 00000337 83C508                  		add	bp,8
+   545 0000033A 81C66801                		add	si,360
+   546 0000033E FECA                    		dec	dl
+   547 00000340 75DB                    		jnz	.loop
+   548                                  
+   549 00000342 C3                      .exit	ret
+   550                                  
+   551 00000343 89FE                    HexChar:	mov		si,di
+   552 00000345 88C3                    			mov		bl,al
+   553 00000347 D0EB                    			shr		bl,1
+   554 00000349 D0EB                    			shr		bl,1
+   555 0000034B D0EB                    			shr		bl,1
+   556 0000034D D0EB                    			shr		bl,1
+   557 0000034F 83E30F                  			and		bx,15
+   558 00000352 01DB                    			add		bx,bx
+   559 00000354 01DB                    			add		bx,bx
+   560 00000356 50                       push ax
+   561 00000357 668B87[E001]            			mov		eax,[Hex0+bx]
+   562 0000035C 660FC8                  			bswap eax
+   563 0000035F 26668905                			mov		[es:di],eax
+   564 00000363 83C75A                  			add		di,SCREEN_WIDTH_360
+   565 00000366 668B87[2002]            			mov		eax,[Hex1+bx]
+   566 0000036B 660FC8                  			bswap eax
+   567 0000036E 26668905                			mov		[es:di],eax
+   568 00000372 83C75A                  			add		di,SCREEN_WIDTH_360
+   569 00000375 668B87[6002]            			mov		eax,[Hex2+bx]
+   570 0000037A 660FC8                  			bswap eax
+   571 0000037D 26668905                			mov		[es:di],eax
+   572 00000381 83C75A                  			add		di,SCREEN_WIDTH_360
+   573 00000384 668B87[A002]            			mov		eax,[Hex3+bx]
+   574 00000389 660FC8                  			bswap eax
+   575 0000038C 26668905                			mov		[es:di],eax
+   576 00000390 83C75A                  			add		di,SCREEN_WIDTH_360
+   577 00000393 668B87[E002]            			mov		eax,[Hex4+bx]
+   578 00000398 660FC8                  			bswap eax
+   579 0000039B 26668905                			mov		[es:di],eax
+   580 0000039F 58                       pop ax
+   581 000003A0 89F7                    			mov		di,si
+   582 000003A2 83C704                  			add		di,4
+   583                                  
+   584 000003A5 88C3                    			mov		bl,al
+   585 000003A7 80E30F                  			and		bl,15
+   586 000003AA 01DB                    			add		bx,bx
+   587 000003AC 01DB                    			add		bx,bx
+   588 000003AE 668B87[E001]            			mov		eax,[Hex0+bx]
+   589 000003B3 660FC8                  			bswap eax
+   590 000003B6 26668905                			mov		[es:di],eax
+   591 000003BA 83C75A                  			add		di,SCREEN_WIDTH_360
+   592 000003BD 668B87[2002]            			mov		eax,[Hex1+bx]
+   593 000003C2 660FC8                  			bswap eax
+   594 000003C5 26668905                			mov		[es:di],eax
+   595 000003C9 83C75A                  			add		di,SCREEN_WIDTH_360
+   596 000003CC 668B87[6002]            			mov		eax,[Hex2+bx]
+   597 000003D1 660FC8                  			bswap eax
+   598 000003D4 26668905                			mov		[es:di],eax
+   599 000003D8 83C75A                  			add		di,SCREEN_WIDTH_360
+   600 000003DB 668B87[A002]            			mov		eax,[Hex3+bx]
+   601 000003E0 660FC8                  			bswap eax
+   602 000003E3 26668905                			mov		[es:di],eax
+   603 000003E7 83C75A                  			add		di,SCREEN_WIDTH_360
+   604 000003EA 668B87[E002]            			mov		eax,[Hex4+bx]
+   605 000003EF 660FC8                  			bswap eax
+   606 000003F2 26668905                			mov		[es:di],eax
+   607 000003F6 C3                      			ret
+   608                                  
+   609 000003F7 50                      Hex24:		push	ax
+   610 000003F8 53                      			push	bx
+   611                                  
+   612 000003F9 88F8                    			mov		al,bh
+   613 000003FB E82100                  			call	Hex8
+   614                                  						
+   615 000003FE 5B                      			pop		bx
+   616 000003FF 58                      			pop		ax
+   617                                  
+   618 00000400 50                      			push	ax
+   619 00000401 53                      			push	bx
+   620                                  
+   621 00000402 BF0800                  			mov		di,8
+   622 00000405 E81900                  			call	HexByte
+   623                                  
+   624 00000408 5B                      			pop		bx
+   625 00000409 58                      			pop		ax
+   626                                  
+   627 0000040A 88E0                    			mov		al,ah
+   628 0000040C BF0800                  			mov		di,8
+   629 0000040F EB10                    			jmp		HexByte	; does ret
+   630                                  
+   631 00000411 50                      Hex16:		push	ax
+   632 00000412 53                      			push	bx
+   633                                  
+   634 00000413 88E0                    			mov		al,ah
+   635 00000415 E80700                  			call	Hex8
+   636                                  						
+   637 00000418 5B                      			pop		bx
+   638 00000419 58                      			pop		ax
+   639                                  
+   640 0000041A BF0800                  			mov		di,8
+   641 0000041D EB02                    			jmp		HexByte ; does ret
+   642                                  
+   643 0000041F 31FF                    Hex8:		xor		di,di
+   644 00000421 30FF                    HexByte:	xor		bh,bh
+   645 00000423 88DC                    			mov		ah,bl
+   646 00000425 00E4                    			add		ah,ah	; *2
+   647 00000427 00E3                    			add		bl,ah	; *3
+   648 00000429 01DB                    			add		bx,bx	; *6
+   649 0000042B 01DB                    			add		bx,bx	; *12
+   650 0000042D 03BF[0000]              			add		di,[BackBufferTable360+bx]	; lookup start ver
+   651 00000431 033E[800C]              				add		di, [ScreenBuffer]
+   652                                  
+   653 00000435 E90BFF                  			jmp		HexChar	 ; does ret
+   654                                  ;			ret
+   655                                  
+   656                                  section .data 
+   657                                  align	2 ; 16 ; 8 ; 16
+   658                                  	
+   659                                  BackBufferTable360:
+   660 00000000 00005A00B4000E0168-     		dw SCREEN_WIDTH_360*000,SCREEN_WIDTH_360*001,SCREEN_WIDTH_360*002,SCREEN_WIDTH_360*003,SCREEN_WIDTH_360*004,SCREEN_WIDTH_360*005,SCREEN_WIDTH_360*006,SCREEN_WIDTH_360*007,SCREEN_WIDTH_360*008,SCREEN_WIDTH_360*009
+   660 00000009 01C2011C027602D002-
+   660 00000012 2A03               
+   661 00000014 8403DE0338049204EC-     		dw SCREEN_WIDTH_360*010,SCREEN_WIDTH_360*011,SCREEN_WIDTH_360*012,SCREEN_WIDTH_360*013,SCREEN_WIDTH_360*014,SCREEN_WIDTH_360*015,SCREEN_WIDTH_360*016,SCREEN_WIDTH_360*017,SCREEN_WIDTH_360*018,SCREEN_WIDTH_360*019
+   661 0000001D 044605A005FA055406-
+   661 00000026 AE06               
+   662 00000028 08076207BC07160870-     		dw SCREEN_WIDTH_360*020,SCREEN_WIDTH_360*021,SCREEN_WIDTH_360*022,SCREEN_WIDTH_360*023,SCREEN_WIDTH_360*024,SCREEN_WIDTH_360*025,SCREEN_WIDTH_360*026,SCREEN_WIDTH_360*027,SCREEN_WIDTH_360*028,SCREEN_WIDTH_360*029
+   662 00000031 08CA0824097E09D809-
+   662 0000003A 320A               
+   663 0000003C 8C0AE60A400B9A0BF4-     		dw SCREEN_WIDTH_360*030,SCREEN_WIDTH_360*031,SCREEN_WIDTH_360*032,SCREEN_WIDTH_360*033,SCREEN_WIDTH_360*034,SCREEN_WIDTH_360*035,SCREEN_WIDTH_360*036,SCREEN_WIDTH_360*037,SCREEN_WIDTH_360*038,SCREEN_WIDTH_360*039
+   663 00000045 0B4E0CA80C020D5C0D-
+   663 0000004E B60D               
+   664 00000050 100E6A0EC40E1E0F78-     		dw SCREEN_WIDTH_360*040,SCREEN_WIDTH_360*041,SCREEN_WIDTH_360*042,SCREEN_WIDTH_360*043,SCREEN_WIDTH_360*044,SCREEN_WIDTH_360*045,SCREEN_WIDTH_360*046,SCREEN_WIDTH_360*047,SCREEN_WIDTH_360*048,SCREEN_WIDTH_360*049
+   664 00000059 0FD20F2C108610E010-
+   664 00000062 3A11               
+   665 00000064 9411EE114812A212FC-     		dw SCREEN_WIDTH_360*050,SCREEN_WIDTH_360*051,SCREEN_WIDTH_360*052,SCREEN_WIDTH_360*053,SCREEN_WIDTH_360*054,SCREEN_WIDTH_360*055,SCREEN_WIDTH_360*056,SCREEN_WIDTH_360*057,SCREEN_WIDTH_360*058,SCREEN_WIDTH_360*059
+   665 0000006D 125613B0130A146414-
+   665 00000076 BE14               
+   666 00000078 18157215CC15261680-     		dw SCREEN_WIDTH_360*060,SCREEN_WIDTH_360*061,SCREEN_WIDTH_360*062,SCREEN_WIDTH_360*063,SCREEN_WIDTH_360*064,SCREEN_WIDTH_360*065,SCREEN_WIDTH_360*066,SCREEN_WIDTH_360*067,SCREEN_WIDTH_360*068,SCREEN_WIDTH_360*069
+   666 00000081 16DA1634178E17E817-
+   666 0000008A 4218               
+   667 0000008C 9C18F6185019AA1904-     		dw SCREEN_WIDTH_360*070,SCREEN_WIDTH_360*071,SCREEN_WIDTH_360*072,SCREEN_WIDTH_360*073,SCREEN_WIDTH_360*074,SCREEN_WIDTH_360*075,SCREEN_WIDTH_360*076,SCREEN_WIDTH_360*077,SCREEN_WIDTH_360*078,SCREEN_WIDTH_360*079
+   667 00000095 1A5E1AB81A121B6C1B-
+   667 0000009E C61B               
+   668 000000A0 201C7A1CD41C2E1D88-     		dw SCREEN_WIDTH_360*080,SCREEN_WIDTH_360*081,SCREEN_WIDTH_360*082,SCREEN_WIDTH_360*083,SCREEN_WIDTH_360*084,SCREEN_WIDTH_360*085,SCREEN_WIDTH_360*086,SCREEN_WIDTH_360*087,SCREEN_WIDTH_360*088,SCREEN_WIDTH_360*089
+   668 000000A9 1DE21D3C1E961EF01E-
+   668 000000B2 4A1F               
+   669 000000B4 A41FFE1F5820B2200C-     		dw SCREEN_WIDTH_360*090,SCREEN_WIDTH_360*091,SCREEN_WIDTH_360*092,SCREEN_WIDTH_360*093,SCREEN_WIDTH_360*094,SCREEN_WIDTH_360*095,SCREEN_WIDTH_360*096,SCREEN_WIDTH_360*097,SCREEN_WIDTH_360*098,SCREEN_WIDTH_360*099
+   669 000000BD 216621C0211A227422-
+   669 000000C6 CE22               
+   670                                  
+   671 000000C8 28238223DC23362490-     		dw SCREEN_WIDTH_360*100,SCREEN_WIDTH_360*101,SCREEN_WIDTH_360*102,SCREEN_WIDTH_360*103,SCREEN_WIDTH_360*104,SCREEN_WIDTH_360*105,SCREEN_WIDTH_360*106,SCREEN_WIDTH_360*107,SCREEN_WIDTH_360*108,SCREEN_WIDTH_360*109
+   671 000000D1 24EA2444259E25F825-
+   671 000000DA 5226               
+   672 000000DC AC2606276027BA2714-     		dw SCREEN_WIDTH_360*110,SCREEN_WIDTH_360*111,SCREEN_WIDTH_360*112,SCREEN_WIDTH_360*113,SCREEN_WIDTH_360*114,SCREEN_WIDTH_360*115,SCREEN_WIDTH_360*116,SCREEN_WIDTH_360*117,SCREEN_WIDTH_360*118,SCREEN_WIDTH_360*119
+   672 000000E5 286E28C82822297C29-
+   672 000000EE D629               
+   673 000000F0 302A8A2AE42A3E2B98-     		dw SCREEN_WIDTH_360*120,SCREEN_WIDTH_360*121,SCREEN_WIDTH_360*122,SCREEN_WIDTH_360*123,SCREEN_WIDTH_360*124,SCREEN_WIDTH_360*125,SCREEN_WIDTH_360*126,SCREEN_WIDTH_360*127,SCREEN_WIDTH_360*128,SCREEN_WIDTH_360*129
+   673 000000F9 2BF22B4C2CA62C002D-
+   673 00000102 5A2D               
+   674 00000104 B42D0E2E682EC22E1C-     		dw SCREEN_WIDTH_360*130,SCREEN_WIDTH_360*131,SCREEN_WIDTH_360*132,SCREEN_WIDTH_360*133,SCREEN_WIDTH_360*134,SCREEN_WIDTH_360*135,SCREEN_WIDTH_360*136,SCREEN_WIDTH_360*137,SCREEN_WIDTH_360*138,SCREEN_WIDTH_360*139
+   674 0000010D 2F762FD02F2A308430-
+   674 00000116 DE30               
+   675 00000118 38319231EC314632A0-     		dw SCREEN_WIDTH_360*140,SCREEN_WIDTH_360*141,SCREEN_WIDTH_360*142,SCREEN_WIDTH_360*143,SCREEN_WIDTH_360*144,SCREEN_WIDTH_360*145,SCREEN_WIDTH_360*146,SCREEN_WIDTH_360*147,SCREEN_WIDTH_360*148,SCREEN_WIDTH_360*149
+   675 00000121 32FA325433AE330834-
+   675 0000012A 6234               
+   676 0000012C BC3416357035CA3524-     		dw SCREEN_WIDTH_360*150,SCREEN_WIDTH_360*151,SCREEN_WIDTH_360*152,SCREEN_WIDTH_360*153,SCREEN_WIDTH_360*154,SCREEN_WIDTH_360*155,SCREEN_WIDTH_360*156,SCREEN_WIDTH_360*157,SCREEN_WIDTH_360*158,SCREEN_WIDTH_360*159
+   676 00000135 367E36D83632378C37-
+   676 0000013E E637               
+   677 00000140 40389A38F4384E39A8-     		dw SCREEN_WIDTH_360*160,SCREEN_WIDTH_360*161,SCREEN_WIDTH_360*162,SCREEN_WIDTH_360*163,SCREEN_WIDTH_360*164,SCREEN_WIDTH_360*165,SCREEN_WIDTH_360*166,SCREEN_WIDTH_360*167,SCREEN_WIDTH_360*168,SCREEN_WIDTH_360*169
+   677 00000149 39023A5C3AB63A103B-
+   677 00000152 6A3B               
+   678 00000154 C43B1E3C783CD23C2C-     		dw SCREEN_WIDTH_360*170,SCREEN_WIDTH_360*171,SCREEN_WIDTH_360*172,SCREEN_WIDTH_360*173,SCREEN_WIDTH_360*174,SCREEN_WIDTH_360*175,SCREEN_WIDTH_360*176,SCREEN_WIDTH_360*177,SCREEN_WIDTH_360*178,SCREEN_WIDTH_360*179
+   678 0000015D 3D863DE03D3A3E943E-
+   678 00000166 EE3E               
+   679 00000168 483FA23FFC3F5640B0-     		dw SCREEN_WIDTH_360*180,SCREEN_WIDTH_360*181,SCREEN_WIDTH_360*182,SCREEN_WIDTH_360*183,SCREEN_WIDTH_360*184,SCREEN_WIDTH_360*185,SCREEN_WIDTH_360*186,SCREEN_WIDTH_360*187,SCREEN_WIDTH_360*188,SCREEN_WIDTH_360*189
+   679 00000171 400A416441BE411842-
+   679 0000017A 7242               
+   680 0000017C CC4226438043DA4334-     		dw SCREEN_WIDTH_360*190,SCREEN_WIDTH_360*191,SCREEN_WIDTH_360*192,SCREEN_WIDTH_360*193,SCREEN_WIDTH_360*194,SCREEN_WIDTH_360*195,SCREEN_WIDTH_360*196,SCREEN_WIDTH_360*197,SCREEN_WIDTH_360*198,SCREEN_WIDTH_360*199
+   680 00000185 448E44E84442459C45-
+   680 0000018E F645               
+   681                                  
+   682 00000190 5046AA4604475E47B8-     		dw SCREEN_WIDTH_360*200,SCREEN_WIDTH_360*201,SCREEN_WIDTH_360*202,SCREEN_WIDTH_360*203,SCREEN_WIDTH_360*204,SCREEN_WIDTH_360*205,SCREEN_WIDTH_360*206,SCREEN_WIDTH_360*207,SCREEN_WIDTH_360*208,SCREEN_WIDTH_360*209
+   682 00000199 4712486C48C6482049-
+   682 000001A2 7A49               
+   683 000001A4 D4492E4A884AE24A3C-     		dw SCREEN_WIDTH_360*210,SCREEN_WIDTH_360*211,SCREEN_WIDTH_360*212,SCREEN_WIDTH_360*213,SCREEN_WIDTH_360*214,SCREEN_WIDTH_360*215,SCREEN_WIDTH_360*216,SCREEN_WIDTH_360*217,SCREEN_WIDTH_360*218,SCREEN_WIDTH_360*219
+   683 000001AD 4B964BF04B4A4CA44C-
+   683 000001B6 FE4C               
+   684 000001B8 584DB24D0C4E664EC0-     		dw SCREEN_WIDTH_360*220,SCREEN_WIDTH_360*221,SCREEN_WIDTH_360*222,SCREEN_WIDTH_360*223,SCREEN_WIDTH_360*224,SCREEN_WIDTH_360*225,SCREEN_WIDTH_360*226,SCREEN_WIDTH_360*227,SCREEN_WIDTH_360*228,SCREEN_WIDTH_360*229
+   684 000001C1 4E1A4F744FCE4F2850-
+   684 000001CA 8250               
+   685 000001CC DC5036519051EA5144-     		dw SCREEN_WIDTH_360*230,SCREEN_WIDTH_360*231,SCREEN_WIDTH_360*232,SCREEN_WIDTH_360*233,SCREEN_WIDTH_360*234,SCREEN_WIDTH_360*235,SCREEN_WIDTH_360*236,SCREEN_WIDTH_360*237,SCREEN_WIDTH_360*238,SCREEN_WIDTH_360*239
+   685 000001D5 529E52F8525253AC53-
+   685 000001DE 0654               
+   686                                  
+   687 000001E0 005555550000550000-     Hex0	dd 055555500h,000550000h,055555500h,055555500h,055005500h,055555500h,055555500h,055555500h,055555500h,055555500h,055555500h,055555500h,055555500h,055550000h,055555500h,055555500h
+   687 000001E9 555555005555550055-
+   687 000001F2 005500555555005555-
+   687 000001FB 550055555500555555-
+   687 00000204 005555550055555500-
+   687 0000020D 555555005555550000-
+   687 00000216 555500555555005555-
+   687 0000021F 55                 
+   688 00000220 005500550000555500-     Hex1	dd 055005500h,055550000h,000005500h,000005500h,055005500h,055000000h,055000000h,000005500h,055005500h,055005500h,055005500h,055005500h,055000000h,055005500h,055000000h,055000000h
+   688 00000229 550000005500000055-
+   688 00000232 005500000055000000-
+   688 0000023B 550055000000550055-
+   688 00000244 005500550055005500-
+   688 0000024D 550055000000550055-
+   688 00000256 005500000055000000-
+   688 0000025F 55                 
+   689 00000260 005500550000550000-     Hex2	dd 055005500h,000550000h,055555500h,055555500h,055555500h,055555500h,055555500h,000005500h,055555500h,055555500h,055555500h,055550000h,055000000h,055005500h,055555500h,055555500h
+   689 00000269 555555005555550055-
+   689 00000272 555500555555005555-
+   689 0000027B 550055000000555555-
+   689 00000284 005555550055555500-
+   689 0000028D 005555000000550055-
+   689 00000296 005500555555005555-
+   689 0000029F 55                 
+   690 000002A0 005500550000550000-     Hex3	dd 055005500h,000550000h,055000000h,000005500h,000005500h,000005500h,055005500h,000005500h,055005500h,000005500h,055005500h,055005500h,055000000h,055005500h,055000000h,055000000h
+   690 000002A9 000055005500000055-
+   690 000002B2 000000550000005500-
+   690 000002BB 550055000000550055-
+   690 000002C4 005500000055005500-
+   690 000002CD 550055000000550055-
+   690 000002D6 005500000055000000-
+   690 000002DF 55                 
+   691 000002E0 005555550055555500-     Hex4	dd 055555500h,055555500h,055555500h,055555500h,000005500h,055555500h,055555500h,000005500h,055555500h,055555500h,055005500h,055555500h,055555500h,055550000h,055555500h,055000000h
+   691 000002E9 555555005555550055-
+   691 000002F2 000000555555005555-
+   691 000002FB 550055000000555555-
+   691 00000304 005555550055005500-
+   691 0000030D 555555005555550000-
+   691 00000316 555500555555000000-
+   691 0000031F 55                 
+   692                                  
+   693                                  align	4
+   694                                  PointList:
+   695                                  
+   696 00000320 B8003C012200EB00C2-      dw 0b8h, 13ch, 22h, 0ebh, 0c2h, 016h
+   696 00000329 001600             
+   697                                   
+   698                                  ; dw 0a1h, 12bh, 039h, 0d4h, 0b5h, 01h
+   699                                   
+   700                                  ; dw	056h,0e0h 
+   701                                  ; dw	084h,089h 
+   702                                  ; dw	06ah,04ch 
+   703                                  
+   704                                  ; dw 0bah, 03ah,120h
+   705                                  ; dw 0edh,0c0h
+   706                                  ; dw 018h,0bah
+   707                                  
+   708                                  ; dw 095h, 011fh 
+   709                                  ; dw 045h, 0c8h
+   710                                  ; dw 0a9h, 00dh
+   711                                   
+   712                                  ;		dw	10,10
+   713                                  ;		dw	190,90
+   714                                  ;		dw	30,310
+   715 0000032C 00000000                		dw	0,0
+   716 00000330 00000000                		dw	0,0
+   717 00000334 00000000                		dw	0,0
+   718 00000338 00000000                		dw	0,0
+   719 0000033C 00000000                		dw	0,0
+   720                                  ;		resw	256
+   721                                  
+   722                                  DirList:
+   723 00000340 0100FFFFFFFF0100FF-      dw 1,-1,-1,1,-1,1
+   723 00000349 FF0100             
+   724                                   
+   725                                  ; dw 1,1,-1,1,1,-1
+   726                                   
+   727                                  ; dw 1,-1
+   728                                  ; dw -1,1
+   729                                  ; dw -1,1
+   730                                   
+   731 0000034C 01000100                 dw	1,1
+   732 00000350 FFFF0100                 dw	-1,1
+   733 00000354 0100FFFF                 dw	1,-1
+   734 00000358 0100FFFF0100FFFF01-      dw 	+1,-1,+1,-1,+1,-1,+1,-1,+1,-1,+1,-1
+   734 00000361 00FFFF0100FFFF0100-
+   734 0000036A FFFF0100FFFF       
+   735                                  		
+   736                                  section .bss 	; put uninitialized data here
+   737                                  align	4
+   738 00000000 <res C80h>              EdgeTable	resd	800
+   739                                  
+   740 00000C80 ????                    ScreenBuffer	resw	1
+   741 00000C82 ????                    ScreenBufferSeg	resw	1
+   742 00000C84 ??                      Colour		resb	1
+   743                                  
+   744                                  
+   745                                  ; /* CRT controller registers */
+   746                                  ; #define HIGH_ADDRESS 0x0C
+   747                                  ; #define LOW_ADDRESS  0x0D
+   748                                  
+   749                                  ; ...
+   750                                  
+   751                                  ; temp = visible_page;
+   752                                  ; visible_page = non_visible_page;
+   753                                  ; non_visible_page = temp;
+   754                                  
+   755                                  ; high_addr=HIGH_ADDRESS | (visible_page & 0xff00);
+   756                                  ; low_addr =LOW_ADDRESS  | (visible_page << 8);
+   757                                  
+   758                                  ; while ((inp(INPUT_STATUS_1) & VRETRACE));
+   759                                  ; outpw(CRTC_INDEX, high_addr);
+   760                                  ; outpw(CRTC_INDEX, low_addr);
+   761                                  ; while (!(inp(INPUT_STATUS_1) & VRETRACE));
+   762                                  
+   763                                  ; Page flipping in unchained mode
+   764                                  ; First, set up two word-sized variables to keep track of the visible and non-visible pages. These are offsets to video memory.
+   765                                  
+   766                                  ; unsigned int visible_page=0;
+   767                                  ; unsigned int non_visible_page=360*240/4;
+   768                                  ; Then do all the drawing to the non-visible page. For instance, if a pixel was to be plotted:
+   769                                  
+   770                                  ; /* select plane */
+   771                                  ; outp(SC_INDEX, MAP_MASK);
+   772                                  ; outp(SC_DATA,  1 << (x&3) );
+   773                                  
+   774                                  ; VGA[non_visible_page+(y<<6)+(y<<4)+(x>>2)]=color;
+   775                                  ; When all the drawing is finished, it is time to switch the pages. The new offset is set through two registers on the CRT controller. The first, 0x0C, sets the upper 8-bits of the offset, and the second, 0x0D, sets the lower 8-bits.
+   776                                  
+   777                                  ; /* CRT controller registers */
+   778                                  ; #define HIGH_ADDRESS 0x0C
+   779                                  ; #define LOW_ADDRESS  0x0D
+   780                                  
+   781                                  ; ...
+   782                                  
+   783                                  ; mov bx,[screen]
+   784                                  ; mov cx,[backbuffer]
+   785                                  ; mov [screen],cx
+   786                                  ; mov [backbuffer],bx
+   787                                  
+   788                                  ; mov dx, CRTC_INDEX
+   789                                  ; mov ah, LOW_ADDRESS
+   790                                  ; mov al,cl
+   791                                  ; out dx,ax
+   792                                  ; mov ah, HIGH_ADDRESS
+   793                                  ; mov al,cl
+   794                                  ; out dx,ax
+   795                                  
+   796                                  ; setup
+   797                                  ; mov ax,0
+   798                                  ; mov [screen],ax
+   799                                  ; mov bx,((360*240)/4)
+   800                                  ; mov [backbuffer],bx
+   801                                  
+   802                                  ; high_addr=HIGH_ADDRESS | (visible_page & 0xff00);
+   803                                  ; low_addr =LOW_ADDRESS  | (visible_page << 8);
+   804                                  
+   805                                  ; while ((inp(INPUT_STATUS_1) & VRETRACE));
+   806                                  ; outpw(CRTC_INDEX, high_addr);
+   807                                  ; outpw(CRTC_INDEX, low_addr);
+   808                                  ; while (!(inp(INPUT_STATUS_1) & VRETRACE));
