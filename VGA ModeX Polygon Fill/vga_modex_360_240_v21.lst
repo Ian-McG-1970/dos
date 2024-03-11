@@ -1,0 +1,3429 @@
+     1                                  ; todo - page flipping
+     2                                  
+     3                                  ; nasm vga3d_v16.asm -o vga3d.com -f bin
+     4                                  
+     5                                  VIDEO_SEGMENT	equ	0A000h 	; display memory segment for true CGA graphics modes
+     6                                  
+     7                                  VIDEO_SEGMENT_PAGE_0 equ VIDEO_SEGMENT
+     8                                  VIDEO_SEGMENT_PAGE_1 equ VIDEO_SEGMENT_PAGE_0 + (SCREEN_SIZE/16)
+     9                                  
+    10                                  LINE_SIZE_IN_BYTES equ 360
+    11                                  SCREEN_WIDTH_360 equ LINE_SIZE_IN_BYTES/4
+    12                                  
+    13                                  SCREEN_SIZE_IN_BYTES equ 360*240
+    14                                  SCREEN_SIZE equ SCREEN_SIZE_IN_BYTES/4
+    15                                  SCREEN_SIZE_DWORDS equ SCREEN_SIZE/4
+    16                                  
+    17                                  INPUT_STATUS_1	equ	03dah	; VGA status register
+    18                                  VSYNC_MASK	equ	08h	; vertical sync bit in status register 1
+    19                                  DE_MASK		equ	01h	; display enable bit in status register 1
+    20                                  
+    21                                  HIGH_ADDRESS equ 0Ch
+    22                                  LOW_ADDRESS  equ 0Dh
+    23                                  
+    24                                  MAP_MASK	equ	2		; SC map mask register
+    25                                  SC_INDEX		equ	3c4h	; SC index register
+    26                                  CRTC_INDEX equ 03d4h
+    27                                  
+    28                                  KEY_1	EQU	0231h
+    29                                  KEY_2	EQU	0332h
+    30                                  KEY_3	EQU	0433h
+    31                                  KEY_4 	EQU	0534h
+    32                                  KEY_5 	EQU	0635h
+    33                                  KEY_6 	EQU	0736h
+    34                                  KEY_ESC	EQU 	27
+    35                                  
+    36                                  CPU 486
+    37                                  bits 16
+    38                                  org 100h
+    39                                  
+    40                                  %macro middle 0
+    41                                  	mov 	ax,0ff02h
+    42                                  	out     dx,ax		
+    43                                  %endmacro
+    44                                  
+    45                                  %macro left_edge 0
+    46                                  	mov 	al,00002h
+    47                                  	mov 	ah,[edgeleft+di]
+    48                                  	out     dx,ax
+    49                                  
+    50                                  	shr 	di,2
+    51                                  	add		di,si
+    52                                  
+    53                                  	mov 	al,ch
+    54                                  	stosb
+    55                                  %endmacro
+    56                                  
+    57                                  %macro right_edge 0
+    58                                  	mov 	al,00002h
+    59                                  	mov 	ah,[edgeright+bp]
+    60                                  	out     dx,ax
+    61                                  
+    62                                  	mov 	al,ch
+    63                                  	stosb
+    64                                  %endmacro
+    65                                  
+    66                                  section .text
+    67                                  
+    68                                  start:	
+    69 00000000 E82C01                  		call	Mode360x240
+    70                                  
+    71 00000003 31C0                    	xor	ax,ax
+    72 00000005 A3[800C]                	mov	[ScreenBuffer],ax
+    73 00000008 B800A0                  	mov	ax,VIDEO_SEGMENT
+    74 0000000B A3[820C]                	mov	[ScreenBufferSeg],ax
+    75                                  
+    76 0000000E BAC403                  	mov     dx,SC_INDEX
+    77 00000011 B802FF                  	mov 	ax,0ff02h
+    78 00000014 EF                      	out     dx,ax		
+    79                                  
+    80 00000015 8B1E[820C]              	mov bx,[ScreenBufferSeg]
+    81 00000019 8EC3                    	mov	es,bx
+    82                                  
+    83 0000001B FC                      	cld
+    84                                  
+    85 0000001C 66B822222222            	mov	eax,022222222h
+    86 00000022 6631FF                  	xor	edi,edi
+    87 00000025 66B918150000            	mov	ecx,SCREEN_SIZE/4
+    88 0000002B F366AB                  	rep	stosd
+    89                                  
+    90 0000002E 66B833333333            	mov	eax,033333333h
+    91 00000034 66BF60540000            	mov	edi,SCREEN_SIZE
+    92 0000003A 66B918150000            	mov	ecx,SCREEN_SIZE/4
+    93 00000040 F366AB                  	rep	stosd
+    94                                  	
+    95                                  MainLoop:
+    96 00000043 E85A00                  		call	WaitVSync ; Wait for vertical sync so the new start address has a chance to take effect.
+    97                                  		 
+    98 00000046 B303                    		mov		bl,3
+    99 00000048 B82301                  		mov		ax,0123h
+   100 0000004B E89A13                  		call	Hex16
+   101                                  
+   102 0000004E B305                    		mov		bl,5
+   103 00000050 B86745                  		mov		ax,4567h
+   104 00000053 E89213                  		call	Hex16
+   105                                  
+   106 00000056 B307                    		mov		bl,7
+   107 00000058 B8AB89                  		mov		ax,089abh
+   108 0000005B E88A13                  		call	Hex16
+   109                                  
+   110 0000005E B309                    		mov		bl,9
+   111 00000060 B8EFCD                  		mov		ax,0cdefh
+   112 00000063 E88213                  		call	Hex16
+   113                                  
+   114 00000066 B30B                    		mov		bl,11
+   115 00000068 A1[800C]                		mov		ax,[ScreenBuffer]
+   116 0000006B E87A13                  		call	Hex16
+   117                                  
+   118 0000006E B90300                  	mov	cx,3
+   119 00000071 E83701                  	call	Move
+   120                                  	
+   121 00000074 B90300                  	mov	cx,3
+   122 00000077 E89A01                  	call	Plots
+   123                                  		
+   124 0000007A B055                    	mov	al,55h ; 100
+   125 0000007C B90300                  	mov	cx,3
+   126 0000007F 8D36[E803]              	lea		si,[PointList2]
+   127 00000083 E8A601                  	call	Fill
+   128                                  		
+   129 00000086 B033                    	mov	al,33h ; 100
+   130 00000088 B90300                  	mov	cx,3
+   131 0000008B 8D36[D803]              	lea		si,[PointList]
+   132 0000008F E89A01                  	call	Fill
+   133                                  
+   134 00000092 E85E00                  		call	GetKey
+   135 00000095 73AC                    	jnc		MainLoop
+   136                                  
+   137                                  Done: ; Finished, clear key, reset screen mode and exit.
+   138 00000097 B80300                  	mov	ax,3		; reset to text mode
+   139 0000009A CD10                    	int		10h
+   140                                  	
+   141 0000009C B44C                    	mov	ah,4ch	; exit to DOS
+   142 0000009E CD21                    	int		21h
+   143                                  
+   144                                  ; Wait for the leading edge of vertical sync pulse.
+   145                                  ;
+   146                                  ;WaitVSync	proc	near
+   147                                  ;	mov	dx,INPUT_STATUS_1
+   148                                  ;WaitNotVSyncLoop:
+   149                                  ;	in	al,dx
+   150                                  ;	and	al,VSYNC_MASK
+   151                                  ;	jnz	WaitNotVSyncLoop
+   152                                  ;WaitVSyncLoop:
+   153                                  ;	in	al,dx
+   154                                  ;	and	al,VSYNC_MASK
+   155                                  ;	jz	WaitVSyncLoop
+   156                                  ;	ret
+   157                                  ;WaitVSync	endp
+   158                                  
+   159                                  ;/* Wait until we're not in vertical sync, so we can catch leading edge */
+   160                                  ;      while ((inp(INPUT_STATUS_1) & 0x08) != 0) ;
+   161                                  ;      /* Wait until we are in vertical sync */
+   162                                  ;      while ((inp(INPUT_STATUS_1) & 0x08) == 0) ;
+   163                                  
+   164                                  ; When the offset registers are changed, the page flip does not occur until the end of the next vertical retrace. So after the page is flipped, the program should wait until the end of the vertical retrace before drawing to the non-visible page.
+   165                                  
+   166                                  WaitVSync: ; Wait for the leading edge of vertical sync pulse.
+   167                                  
+   168 000000A0 BADA03                  				mov	dx,INPUT_STATUS_1
+   169 000000A3 EC                      WaitNotVSyncLoop:		in		al,dx
+   170 000000A4 2408                    					and	al,VSYNC_MASK 	; is bit 3 clear so its not in the vertical retrace?
+   171 000000A6 75FB                    					jnz		WaitNotVSyncLoop 	; no its set
+   172                                  
+   173                                  ;				mov	dx,INPUT_STATUS_1
+   174 000000A8 EC                      WaitVSyncLoop:	in	al,dx
+   175 000000A9 2408                    					and	al,VSYNC_MASK 	; is bit 3 set so its in the vertical retrace?;
+   176 000000AB 74FB                    					jz	WaitVSyncLoop 	; no its clear
+   177                                  
+   178 000000AD 8B1E[800C]              				mov 	bx,[ScreenBuffer]
+   179 000000B1 85DB                    				test	bx,bx
+   180 000000B3 7508                    				jnz		.page1
+   181                                  
+   182 000000B5 B846A5                  .page0:				mov		ax,VIDEO_SEGMENT_PAGE_1
+   183 000000B8 BB6054                  					mov 	bx,SCREEN_SIZE
+   184 000000BB EB05                    					jmp 	.cont2
+   185                                  
+   186 000000BD B800A0                  .page1:				mov		ax,VIDEO_SEGMENT_PAGE_0
+   187 000000C0 31DB                    					xor		bx,bx
+   188                                  
+   189 000000C2 891E[800C]              .cont2:			mov 	[ScreenBuffer],bx
+   190 000000C6 A3[820C]                				mov		[ScreenBufferSeg],ax
+   191                                  
+   192 000000C9 BAD403                  				mov dx, CRTC_INDEX
+   193 000000CC B00D                    				mov al, LOW_ADDRESS
+   194 000000CE 88DC                    				mov ah,bl
+   195 000000D0 EF                      				out dx,ax
+   196 000000D1 B00C                    				mov al, HIGH_ADDRESS
+   197 000000D3 88FC                    				mov ah,bh
+   198 000000D5 EF                      				out dx,ax
+   199                                  
+   200 000000D6 BAC403                  				mov     dx, SC_INDEX
+   201 000000D9 B802FF                  				mov 	ax, 0ff02h 
+   202 000000DC EF                      				out     dx, ax		
+   203                                  
+   204 000000DD A1[820C]                				mov	ax,[ScreenBufferSeg]
+   205 000000E0 8EC0                    				mov	es,ax
+   206                                  				
+   207 000000E2 FC                      				cld
+   208 000000E3 6631C0                  				xor	eax,eax
+   209 000000E6 6631FF                  				xor	edi,edi
+   210 000000E9 66B918150000            				mov	ecx,SCREEN_SIZE/4
+   211 000000EF F366AB                  				rep	stosd
+   212                                  
+   213 000000F2 C3                      				ret
+   214                                  
+   215                                  GetKey:
+   216 000000F3 B411                    	mov	ah,11h
+   217 000000F5 CD16                    	int	16h         	; has a key been pressed
+   218 000000F7 7426                    	jz	.key_none ; no
+   219 000000F9 B410                    	mov	ah,10h      ; yes 
+   220 000000FB CD16                    	int	16h         	; get it in AX (al= ascii, ah=scan code)
+   221 000000FD 3C1B                    	cmp	al,KEY_ESC
+   222 000000FF 7420                    	je	.key_esc
+   223 00000101 3D3102                  	cmp 	ax,KEY_1
+   224 00000104 741D                    	je 	.key_1
+   225 00000106 3D3203                  	cmp 	ax,KEY_2
+   226 00000109 741A                    	je 	.key_2
+   227 0000010B 3D3304                  	cmp 	ax,KEY_3
+   228 0000010E 7417                    	je 	.key_3
+   229 00000110 3D3405                  	cmp 	ax,KEY_4
+   230 00000113 7414                    	je 	.key_4
+   231 00000115 3D3506                  	cmp 	ax,KEY_5
+   232 00000118 7411                    	je 	.key_5
+   233 0000011A 3D3607                  	cmp 	ax,KEY_6
+   234 0000011D 740E                    	je 	.key_6
+   235                                  .key_none:
+   236 0000011F F8                      	clc
+   237 00000120 C3                      	ret
+   238                                  .key_esc:
+   239 00000121 F9                      	stc
+   240 00000122 C3                      	ret
+   241                                  .key_1:
+   242 00000123 F8                      	clc
+   243 00000124 C3                      	ret
+   244                                  .key_2:
+   245 00000125 F8                      	clc
+   246 00000126 C3                      	ret
+   247                                  .key_3:
+   248 00000127 F8                      	clc
+   249 00000128 C3                      	ret
+   250                                  .key_4:
+   251 00000129 F8                      	clc
+   252 0000012A C3                      	ret
+   253                                  .key_5:
+   254 0000012B F8                      	clc
+   255 0000012C C3                      	ret
+   256                                  .key_6:
+   257 0000012D F8                      	clc
+   258 0000012E C3                      	ret
+   259                                  
+   260                                  Mode360x240:
+   261 0000012F B81200                  		mov    ax,12h
+   262 00000132 CD10                    		int    10h          ; mode 12h to supposedly let the BIOS clear the video memory
+   263                                  
+   264 00000134 B81300                  		mov     ax, 0013h	; 1. Set the BIOS mode 13h, which is the standard 256-color mode.
+   265 00000137 CD10                            int     10h
+   266                                    		
+   267 00000139 BAC403                          mov     dx, SC_INDEX
+   268 0000013C B80406                          mov     ax, 0604h
+   269 0000013F EF                              out     dx, ax		; 2. Put the CHAIN4-mode of Sequencer off
+   270                                    
+   271 00000140 B8020F                          mov     ax, 0F02h
+   272 00000143 EF                              out     dx, ax
+   273 00000144 BA00A0                          mov     dx, VIDEO_SEGMENT
+   274 00000147 8EC2                            mov     es, dx
+   275 00000149 31FF                            xor     di, di
+   276 0000014B 31C0                            xor     ax, ax
+   277 0000014D B90080                          mov     cx, 8000h
+   278 00000150 F3AB                            rep     stosw		; 3. Clear the video memory (setting mode 13h clears only every fourth byte from each plane)
+   279                                   
+   280 00000152 BAD403                          mov     dx, 03D4h
+   281 00000155 B81400                          mov     ax, 0014h
+   282 00000158 EF                              out     dx, ax		; 4. Turn off the CRTC's LONG-mode
+   283                                    
+   284 00000159 B817E3                          mov     ax, 0E317h
+   285 0000015C EF                              out     dx, ax		; 5. Turn on the CRTC's BYTE-mode
+   286                                  	
+   287                                  
+   288 0000015D B8112C                  		mov		ax,	02c11h	; word_out(CRTC_INDEX, V_RETRACE_END, 0x2c); 0x11
+   289 00000160 EF                      		out		dx,	ax
+   290                                  		
+   291 00000161 BA2C03                          mov     dx, 032ch
+   292 00000164 B0E7                    		mov		al,	0e7h		;    outp(MISC_OUTPUT, 0xe7);
+   293 00000166 EE                      		out		dx,al
+   294                                  
+   295 00000167 BAD403                          mov     dx, 003D4h
+   296 0000016A B86B00                  		mov		ax,	0006bh
+   297 0000016D EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_TOTAL, 0x6b); 0x00
+   298                                  
+   299 0000016E B80159                  		mov		ax, 05901h	
+   300 00000171 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_DISPLAY_END, 0x59); 0x01
+   301                                  
+   302 00000172 B8025A                  		mov		ax,05a02h	
+   303 00000175 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_BLANK_START, 0x5a); 0x02
+   304                                  
+   305 00000176 B8038E                  		mov		ax,08e03h	
+   306 00000179 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_BLANK_END, 0x8e); 0x03
+   307                                  
+   308 0000017A B8045E                  		mov		ax,05e04h	
+   309 0000017D EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_RETRACE_START, 0x5e); 0x04
+   310                                  
+   311 0000017E B8058A                  		mov		ax,08a05h
+   312 00000181 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, H_RETRACE_END, 0x8a); 0x05
+   313                                  
+   314 00000182 B8132D                  		mov		ax,02d13h
+   315 00000185 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, OFFSET, 0x2d); 0x13
+   316                                  
+   317 00000186 B8118E                  		mov		ax,08e11h
+   318 00000189 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_RETRACE_END, 0x8e); ; 0x11 set vertical retrace back to normal */
+   319                                  
+   320 0000018A B8112C                  		mov		ax,02c11h	
+   321 0000018D EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_RETRACE_END, 0x2c); ; 0x11
+   322                                  
+   323 0000018E B8060D                  		mov		ax,0d06h	
+   324 00000191 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_TOTAL, 0x0d); 0x06
+   325                                  
+   326 00000192 B8073E                  		mov		ax,03e07h	
+   327 00000195 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, OVERFLOW, 0x3e); 0x07
+   328                                  
+   329 00000196 B810EA                  		mov		ax,0ea10h	
+   330 00000199 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_RETRACE_START, 0xea); 0x10
+   331                                  
+   332 0000019A B811AC                  		mov		ax,0ac11h	
+   333 0000019D EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_RETRACE_END, 0xac); 0x11
+   334                                  
+   335 0000019E B812DF                  		mov		ax,0df12h	
+   336 000001A1 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_DISPLAY_END, 0xdf); 0x12
+   337                                  
+   338 000001A2 B815E7                  		mov		ax,0e715h	
+   339 000001A5 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_BLANK_START, 0xe7); 0x15
+   340                                  
+   341 000001A6 B81606                  		mov		ax,0616h	
+   342 000001A9 EF                      		out		dx,ax		;    word_out(CRTC_INDEX, V_BLANK_END, 0x06); 0x16
+   343 000001AA C3                      		ret
+   344                                  
+   345                                  	
+   346                                  
+   347 000001AB 8D36[D803]              Move:	lea 	si,[PointList]
+   348 000001AF 8D3E[0C04]              		lea	di,[DirList]
+   349                                   
+   350 000001B3 8B04                    .loop		mov	ax,[si]
+   351 000001B5 8B5C02                  		mov	bx,[si+2]
+   352 000001B8 8B15                    		mov	dx,[di]
+   353 000001BA 8B6D02                  		mov	bp,[di+2]
+   354 000001BD 01D0                    		add	ax,dx
+   355 000001BF 01EB                    		add	bx,bp
+   356 000001C1 8904                    		mov	[si],ax
+   357 000001C3 895C02                  		mov	[si+2],bx
+   358                                  
+   359 000001C6 83F800                  		cmp 	ax,0
+   360 000001C9 7502                    		jne 	.testxl
+   361 000001CB F7DA                    			neg 	dx
+   362 000001CD 83FB00                  .testxl		cmp 	bx,0
+   363 000001D0 7502                    		jne 	.testyl
+   364 000001D2 F7DD                    			neg 	bp
+   365 000001D4 3DEF00                  .testyl		cmp 	ax,239
+   366 000001D7 7502                    		jne 	.testxr
+   367 000001D9 F7DA                    			neg 	dx
+   368 000001DB 81FB6701                .testxr		cmp 	bx,359
+   369 000001DF 7502                    		jne 	.testyr
+   370 000001E1 F7DD                    			neg 	bp
+   371 000001E3 8915                    .testyr		mov 	[di],dx
+   372 000001E5 896D02                  		mov	[di+2],bp
+   373                                   
+   374 000001E8 83C604                  		add	si,4
+   375 000001EB 83C704                  		add	di,4
+   376 000001EE 49                      		dec	cx
+   377 000001EF 75C2                    		jne	.loop
+   378 000001F1 C3                      	ret
+   379                                  
+   380                                  Plot:	; bp=v / bx=h / ch=col
+   381                                  
+   382 000001F2 8B16[820C]              	mov dx,[ScreenBufferSeg]
+   383 000001F6 8EC2                    	mov es,dx
+   384                                  
+   385 000001F8 88D9                    	mov		cl,	bl	; backup
+   386 000001FA C1EB02                  	shr		bx,	2	; /4
+   387 000001FD 01ED                    	add		bp,	bp 	; start ver *2
+   388 000001FF 039E[0000]              	add		bx,	[BackBufferTable360+bp]	; ver start
+   389                                  ;	add		bx, [ScreenBuffer]
+   390                                  
+   391 00000203 B401                    	mov		ah,	1 ; move ax,0102h
+   392 00000205 80E103                  	and 	cl,	3
+   393 00000208 D2E4                    	shl		ah,	cl
+   394 0000020A B002                    	mov		al,	02h ; not needed if above implemented?
+   395 0000020C BAC403                  	mov     dx, SC_INDEX
+   396 0000020F EF                      	out     dx, ax		; 2. Put the CHAIN4-mode of Sequencer off
+   397                                  	
+   398 00000210 26882F                  	mov		[es:bx],ch
+   399 00000213 C3                      	ret
+   400                                  
+   401 00000214 8D36[D803]              Plots:	lea 	si,[PointList]
+   402                                   
+   403 00000218 51                      .loop	push	cx
+   404 00000219 8B2C                    		mov	bp,[si]
+   405 0000021B 8B5C02                  		mov	bx,[si+2]
+   406 0000021E B566                    		mov		ch,66h
+   407 00000220 E8CFFF                  		call 	Plot
+   408 00000223 59                      		pop		cx
+   409                                   
+   410 00000224 83C604                  		add	si,4
+   411 00000227 FEC9                    		dec	cl
+   412 00000229 75ED                    		jne	.loop
+   413 0000022B C3                      	ret
+   414                                  
+   415 0000022C A2[840C]                Fill:	mov		[Colour],al		; backup colour
+   416                                  	
+   417                                  ;;		lea		si,[PointList]		; point list
+   418 0000022F 89CB                    		mov		bx,cx			; points
+   419 00000231 C1E302                  		shl		bx,2			; copy first point to last point
+   420 00000234 668B2C                  		mov		ebp,[si]			; get start xy words
+   421 00000237 668928                  		mov		[si+bx],ebp		; put xy words to end
+   422                                  
+   423 0000023A BBFF00                  		mov		bx,000ffh		; set lowest and highest
+   424                                  
+   425 0000023D 51                      .point_loop		push	cx
+   426                                  
+   427 0000023E 8B04                    				mov		ax,[si]		; vstart
+   428 00000240 8B6C02                  				mov		bp,[si+2]	; hstart
+   429 00000243 8B4C04                  				mov		cx,[si+4]	; vend
+   430 00000246 8B5406                  				mov		dx,[si+6]	; hend
+   431                                  
+   432 00000249 8D3E[0000]              				lea		di,[EdgeTable]	; get edge table start - default left edge
+   433 0000024D 39C8                    				cmp 	ax,cx 		; compare vstart vend
+   434 0000024F 7445                    				jz 		.next 		; if same ignore
+   435 00000251 7206                    				jc		.noswap
+   436 00000253 91                      					xchg 	ax,cx 		; swap vstart vend
+   437 00000254 87EA                    					xchg 	bp,dx 		; swap hstart hend
+   438 00000256 83C704                  					add	di,4		; add 4 for right edge
+   439                                  
+   440 00000259 38C3                    .noswap:		cmp 	bl,al 	; smallest xpos
+   441 0000025B 7202                    				jc 	.low
+   442 0000025D 88C3                    					mov 	bl,al 	; yes
+   443                                  
+   444 0000025F 38CF                    .low:			cmp 	bh,cl	; biggest xpos
+   445 00000261 7302                    				jnc 	.high
+   446 00000263 88CF                    					mov		bh,cl 	; yes
+   447                                  
+   448 00000265 29C1                    .high			sub		cx,ax		; vdiff
+   449                                  
+   450 00000267 C1E003                  				shl		ax,3		; *8
+   451 0000026A 01C7                    				add		di,ax		; added to di
+   452                                  	
+   453 0000026C 8EEA                    				mov		gs,dx		; negate set to positive
+   454 0000026E 29EA                    				sub		dx,bp		; hdiff
+   455                                  
+   456 00000270 66C1E510                .positive		shl		ebp,16		; hstart *65536
+   457                                  
+   458 00000274 660FBFC2                				movsx	eax,dx		; hdiff
+   459 00000278 660FBFC9                				movsx	ecx,cx
+   460 0000027C 6699                    				CDQ
+   461 0000027E 66C1E009                				shl		eax,9		; shift left ax 9 times
+   462 00000282 66F7F9                  				idiv	ecx			; divide dx:ax by cx
+   463 00000285 66C1E007                				shl		eax,7		; shift result left 7 times so becomes 16:16
+   464                                  
+   465 00000289 66892D                  .edge_loop		mov		[di],ebp		; store hstart = temp
+   466 0000028C 6601C5                  				add		ebp,eax
+   467 0000028F 83C708                  				add		di,8
+   468 00000292 FEC9                    				dec		cl
+   469 00000294 75F3                    				jnz		.edge_loop
+   470                                  
+   471 00000296 83C604                  .next			add		si,4
+   472 00000299 59                      				pop		cx
+   473 0000029A FEC9                    				dec		cl
+   474 0000029C 759F                    				jnz		.point_loop
+   475                                   
+   476 0000029E 28DF                    				sub		bh,bl			; end - start
+   477 000002A0 7254                    				jc		.exit			; all on same line?
+   478                                  
+   479 000002A2 8A0E[840C]              				mov		cl,[Colour]
+   480 000002A6 88CD                    				mov 	ch,cl
+   481 000002A8 66C1E108                				shl 	ecx,8
+   482 000002AC 88E9                    				mov 	cl,ch
+   483 000002AE 66C1E108                				shl 	ecx,8
+   484 000002B2 88E9                    				mov 	cl,ch
+   485                                  
+   486 000002B4 88F9                    				mov		cl,bh
+   487 000002B6 30FF                    				xor		bh,bh
+   488 000002B8 01DB                    				add		bx,bx 			; start ver *2
+   489 000002BA 8BB7[0000]              				mov		si,[BackBufferTable360+bx]	; start of ver line
+   490 000002BE C1E302                  				shl		bx,2			; start ver *4*8
+   491 000002C1 8DAF[0200]              				lea		bp,[EdgeTable+bx+2]	; point to first 
+   492                                  
+   493 000002C5 BAC403                  	mov     dx,SC_INDEX
+   494                                  
+   495 000002C8 51                      .fillloop			push cx ; not needed?
+   496 000002C9 55                      					push bp
+   497                                   
+   498 000002CA 8B7E04                  					mov		di,[bp+4]
+   499 000002CD 8B6E00                  					mov		bp,[bp]
+   500                                  
+   501 000002D0 39FD                    					cmp		bp,di
+   502 000002D2 7302                    					jnc		.no_swap
+   503 000002D4 87EF                    						xchg 	bp, di
+   504                                  
+   505 000002D6 89F8                    .no_swap:			mov		ax,di
+   506 000002D8 89EB                    					mov		bx,bp
+   507                                  
+   508 000002DA C1E802                  					shr		ax,2
+   509 000002DD C1EB02                  					shr		bx,2
+   510 000002E0 29C3                    					sub		bx,ax
+   511 000002E2 01DB                    					add		bx,bx
+   512 000002E4 8B9F[E001]              					mov		bx,[FillJumpTable+bx]
+   513 000002E8 FFE3                    					JMP		(bx)
+   514                                  
+   515 000002EA 5D                      .fillcont			pop bp
+   516 000002EB 59                      					pop cx
+   517                                  			
+   518 000002EC 83C508                  					add		bp,8
+   519 000002EF 83C65A                  					add		si,360/4
+   520 000002F2 FEC9                    					dec		cl
+   521 000002F4 75D2                    					jnz		.fillloop
+   522                                  
+   523 000002F6 C3                      .exit			ret
+   524                                  
+   525 000002F7 EBF1                    Jump000:		jmp 	Fill.fillcont
+   526                                  
+   527                                  Jump004:		left_edge
+   527                              <1> Jump004: 
+    46 000002F9 B002                <1>  mov al,00002h
+    47 000002FB 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000002FF EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000300 C1EF02              <1>  shr di,2
+    51 00000303 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000305 88E8                <1>  mov al,ch
+    54 00000307 AA                  <1>  stosb
+   528                                  				right_edge
+    58 00000308 B002                <1>  mov al,00002h
+    59 0000030A 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000030E EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000030F 88E8                <1>  mov al,ch
+    63 00000311 AA                  <1>  stosb
+   529 00000312 EBD6                    				jmp 	Fill.fillcont
+   530                                  
+   531                                  Jump008:		left_edge
+   531                              <1> Jump008: 
+    46 00000314 B002                <1>  mov al,00002h
+    47 00000316 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 0000031A EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000031B C1EF02              <1>  shr di,2
+    51 0000031E 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000320 88E8                <1>  mov al,ch
+    54 00000322 AA                  <1>  stosb
+   532                                  				middle
+    41 00000323 B802FF              <1>  mov ax,0ff02h
+    42 00000326 EF                  <1>  out dx,ax
+   533 00000327 88E8                    				mov 	al,ch
+   534 00000329 AA                      				stosb
+   535                                  				right_edge
+    58 0000032A B002                <1>  mov al,00002h
+    59 0000032C 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000330 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000331 88E8                <1>  mov al,ch
+    63 00000333 AA                  <1>  stosb
+   536 00000334 EBB4                    				jmp 	Fill.fillcont
+   537                                  Jump012:
+   538 00000336 88E9                    	mov 	cl,ch
+   539                                  	left_edge
+    46 00000338 B002                <1>  mov al,00002h
+    47 0000033A 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 0000033E EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000033F C1EF02              <1>  shr di,2
+    51 00000342 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000344 88E8                <1>  mov al,ch
+    54 00000346 AA                  <1>  stosb
+   540                                  	middle
+    41 00000347 B802FF              <1>  mov ax,0ff02h
+    42 0000034A EF                  <1>  out dx,ax
+   541 0000034B 89C8                    	mov 	ax,cx
+   542 0000034D AB                      	stosw
+   543                                  	right_edge
+    58 0000034E B002                <1>  mov al,00002h
+    59 00000350 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000354 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000355 88E8                <1>  mov al,ch
+    63 00000357 AA                  <1>  stosb
+   544 00000358 EB90                    	jmp 	Fill.fillcont
+   545                                  Jump016:
+   546 0000035A 88E9                    	mov 	cl,ch
+   547                                  	left_edge
+    46 0000035C B002                <1>  mov al,00002h
+    47 0000035E 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000362 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000363 C1EF02              <1>  shr di,2
+    51 00000366 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000368 88E8                <1>  mov al,ch
+    54 0000036A AA                  <1>  stosb
+   548                                  	middle
+    41 0000036B B802FF              <1>  mov ax,0ff02h
+    42 0000036E EF                  <1>  out dx,ax
+   549 0000036F 89C8                    	mov 	ax,cx
+   550 00000371 AB                      	stosw
+   551 00000372 AA                      	stosb
+   552                                  	right_edge
+    58 00000373 B002                <1>  mov al,00002h
+    59 00000375 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000379 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000037A 88E8                <1>  mov al,ch
+    63 0000037C AA                  <1>  stosb
+   553 0000037D E96AFF                  	jmp 	Fill.fillcont
+   554                                  Jump020:
+   555 00000380 88E9                    	mov 	cl,ch
+   556                                  	left_edge
+    46 00000382 B002                <1>  mov al,00002h
+    47 00000384 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000388 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000389 C1EF02              <1>  shr di,2
+    51 0000038C 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000038E 88E8                <1>  mov al,ch
+    54 00000390 AA                  <1>  stosb
+   557                                  	middle
+    41 00000391 B802FF              <1>  mov ax,0ff02h
+    42 00000394 EF                  <1>  out dx,ax
+   558 00000395 6689C8                  	mov 	eax,ecx
+   559 00000398 66AB                    	stosd
+   560                                  	right_edge
+    58 0000039A B002                <1>  mov al,00002h
+    59 0000039C 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000003A0 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000003A1 88E8                <1>  mov al,ch
+    63 000003A3 AA                  <1>  stosb
+   561 000003A4 E943FF                  	jmp 	Fill.fillcont
+   562                                  Jump024:
+   563 000003A7 88E9                    	mov 	cl,ch
+   564                                  	left_edge
+    46 000003A9 B002                <1>  mov al,00002h
+    47 000003AB 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000003AF EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000003B0 C1EF02              <1>  shr di,2
+    51 000003B3 01F7                <1>  add di,si
+    52                              <1> 
+    53 000003B5 88E8                <1>  mov al,ch
+    54 000003B7 AA                  <1>  stosb
+   565                                  	middle
+    41 000003B8 B802FF              <1>  mov ax,0ff02h
+    42 000003BB EF                  <1>  out dx,ax
+   566 000003BC 6689C8                  	mov 	eax,ecx
+   567 000003BF AA                      	stosb
+   568 000003C0 66AB                    	stosd
+   569                                  	right_edge
+    58 000003C2 B002                <1>  mov al,00002h
+    59 000003C4 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000003C8 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000003C9 88E8                <1>  mov al,ch
+    63 000003CB AA                  <1>  stosb
+   570 000003CC E91BFF                  	jmp 	Fill.fillcont
+   571                                  Jump028:
+   572 000003CF 88E9                    	mov 	cl,ch
+   573                                  	left_edge
+    46 000003D1 B002                <1>  mov al,00002h
+    47 000003D3 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000003D7 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000003D8 C1EF02              <1>  shr di,2
+    51 000003DB 01F7                <1>  add di,si
+    52                              <1> 
+    53 000003DD 88E8                <1>  mov al,ch
+    54 000003DF AA                  <1>  stosb
+   574                                  	middle
+    41 000003E0 B802FF              <1>  mov ax,0ff02h
+    42 000003E3 EF                  <1>  out dx,ax
+   575 000003E4 6689C8                  	mov 	eax,ecx
+   576 000003E7 AB                      	stosw
+   577 000003E8 66AB                    	stosd
+   578                                  	right_edge
+    58 000003EA B002                <1>  mov al,00002h
+    59 000003EC 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000003F0 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000003F1 88E8                <1>  mov al,ch
+    63 000003F3 AA                  <1>  stosb
+   579 000003F4 E9F3FE                  	jmp 	Fill.fillcont
+   580                                  Jump032:
+   581 000003F7 88E9                    	mov 	cl,ch
+   582                                  	left_edge
+    46 000003F9 B002                <1>  mov al,00002h
+    47 000003FB 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000003FF EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000400 C1EF02              <1>  shr di,2
+    51 00000403 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000405 88E8                <1>  mov al,ch
+    54 00000407 AA                  <1>  stosb
+   583                                  	middle
+    41 00000408 B802FF              <1>  mov ax,0ff02h
+    42 0000040B EF                  <1>  out dx,ax
+   584 0000040C 6689C8                  	mov 	eax,ecx
+   585 0000040F AA                      	stosb
+   586 00000410 AB                      	stosw
+   587 00000411 66AB                    	stosd
+   588                                  	right_edge
+    58 00000413 B002                <1>  mov al,00002h
+    59 00000415 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000419 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000041A 88E8                <1>  mov al,ch
+    63 0000041C AA                  <1>  stosb
+   589 0000041D E9CAFE                  	jmp 	Fill.fillcont
+   590                                  Jump036:
+   591 00000420 88E9                    	mov 	cl,ch
+   592                                  	left_edge
+    46 00000422 B002                <1>  mov al,00002h
+    47 00000424 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000428 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000429 C1EF02              <1>  shr di,2
+    51 0000042C 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000042E 88E8                <1>  mov al,ch
+    54 00000430 AA                  <1>  stosb
+   593                                  	middle
+    41 00000431 B802FF              <1>  mov ax,0ff02h
+    42 00000434 EF                  <1>  out dx,ax
+   594 00000435 6689C8                  	mov 	eax,ecx
+   595 00000438 B90200                  	mov		cx,2
+   596 0000043B F366AB                  	rep		stosd
+   597 0000043E 89C1                    	mov 	cx,ax
+   598                                  	right_edge
+    58 00000440 B002                <1>  mov al,00002h
+    59 00000442 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000446 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000447 88E8                <1>  mov al,ch
+    63 00000449 AA                  <1>  stosb
+   599 0000044A E99DFE                  	jmp 	Fill.fillcont
+   600                                  Jump040:
+   601 0000044D 88E9                    	mov 	cl,ch
+   602                                  	left_edge
+    46 0000044F B002                <1>  mov al,00002h
+    47 00000451 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000455 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000456 C1EF02              <1>  shr di,2
+    51 00000459 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000045B 88E8                <1>  mov al,ch
+    54 0000045D AA                  <1>  stosb
+   603                                  	middle
+    41 0000045E B802FF              <1>  mov ax,0ff02h
+    42 00000461 EF                  <1>  out dx,ax
+   604 00000462 6689C8                  	mov 	eax,ecx
+   605 00000465 AA                      	stosb
+   606 00000466 B90200                  	mov	cx,2
+   607 00000469 F366AB                  	rep	stosd
+   608 0000046C 89C1                    	mov 	cx,ax
+   609                                  	right_edge
+    58 0000046E B002                <1>  mov al,00002h
+    59 00000470 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000474 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000475 88E8                <1>  mov al,ch
+    63 00000477 AA                  <1>  stosb
+   610 00000478 E96FFE                  	jmp 	Fill.fillcont
+   611                                  Jump044:
+   612 0000047B 88E9                    	mov 	cl,ch
+   613                                  	left_edge
+    46 0000047D B002                <1>  mov al,00002h
+    47 0000047F 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000483 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000484 C1EF02              <1>  shr di,2
+    51 00000487 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000489 88E8                <1>  mov al,ch
+    54 0000048B AA                  <1>  stosb
+   614                                  	middle
+    41 0000048C B802FF              <1>  mov ax,0ff02h
+    42 0000048F EF                  <1>  out dx,ax
+   615 00000490 6689C8                  	mov 	eax,ecx
+   616 00000493 AB                      	stosw
+   617 00000494 B90200                  	mov	cx,2
+   618 00000497 F366AB                  	rep	stosd
+   619 0000049A 89C1                    	mov 	cx,ax
+   620                                  	right_edge
+    58 0000049C B002                <1>  mov al,00002h
+    59 0000049E 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000004A2 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000004A3 88E8                <1>  mov al,ch
+    63 000004A5 AA                  <1>  stosb
+   621 000004A6 E941FE                  	jmp 	Fill.fillcont
+   622                                  Jump048:
+   623 000004A9 88E9                    	mov 	cl,ch
+   624                                  	left_edge
+    46 000004AB B002                <1>  mov al,00002h
+    47 000004AD 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000004B1 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000004B2 C1EF02              <1>  shr di,2
+    51 000004B5 01F7                <1>  add di,si
+    52                              <1> 
+    53 000004B7 88E8                <1>  mov al,ch
+    54 000004B9 AA                  <1>  stosb
+   625                                  	middle
+    41 000004BA B802FF              <1>  mov ax,0ff02h
+    42 000004BD EF                  <1>  out dx,ax
+   626 000004BE 6689C8                  	mov 	eax,ecx
+   627 000004C1 AA                      	stosb
+   628 000004C2 AB                      	stosw
+   629 000004C3 B90200                  	mov	cx,2
+   630 000004C6 F366AB                  	rep	stosd
+   631 000004C9 89C1                    	mov 	cx,ax
+   632                                  	right_edge
+    58 000004CB B002                <1>  mov al,00002h
+    59 000004CD 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000004D1 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000004D2 88E8                <1>  mov al,ch
+    63 000004D4 AA                  <1>  stosb
+   633 000004D5 E912FE                  	jmp 	Fill.fillcont
+   634                                  Jump052:
+   635 000004D8 88E9                    	mov 	cl,ch
+   636                                  	left_edge
+    46 000004DA B002                <1>  mov al,00002h
+    47 000004DC 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000004E0 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000004E1 C1EF02              <1>  shr di,2
+    51 000004E4 01F7                <1>  add di,si
+    52                              <1> 
+    53 000004E6 88E8                <1>  mov al,ch
+    54 000004E8 AA                  <1>  stosb
+   637                                  	middle
+    41 000004E9 B802FF              <1>  mov ax,0ff02h
+    42 000004EC EF                  <1>  out dx,ax
+   638 000004ED 6689C8                  	mov 	eax,ecx
+   639 000004F0 B90300                  	mov	cx,3
+   640 000004F3 F366AB                  	rep	stosd
+   641 000004F6 89C1                    	mov 	cx,ax
+   642                                  	right_edge
+    58 000004F8 B002                <1>  mov al,00002h
+    59 000004FA 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000004FE EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000004FF 88E8                <1>  mov al,ch
+    63 00000501 AA                  <1>  stosb
+   643 00000502 E9E5FD                  	jmp 	Fill.fillcont
+   644                                  Jump056:
+   645 00000505 88E9                    	mov 	cl,ch
+   646                                  	left_edge
+    46 00000507 B002                <1>  mov al,00002h
+    47 00000509 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 0000050D EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000050E C1EF02              <1>  shr di,2
+    51 00000511 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000513 88E8                <1>  mov al,ch
+    54 00000515 AA                  <1>  stosb
+   647                                  	middle
+    41 00000516 B802FF              <1>  mov ax,0ff02h
+    42 00000519 EF                  <1>  out dx,ax
+   648 0000051A 6689C8                  	mov 	eax,ecx
+   649 0000051D AA                      	stosb
+   650 0000051E B90300                  	mov	cx,3
+   651 00000521 F366AB                  	rep	stosd
+   652 00000524 89C1                    	mov 	cx,ax
+   653                                  	right_edge
+    58 00000526 B002                <1>  mov al,00002h
+    59 00000528 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000052C EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000052D 88E8                <1>  mov al,ch
+    63 0000052F AA                  <1>  stosb
+   654 00000530 E9B7FD                  	jmp 	Fill.fillcont
+   655                                  Jump060:
+   656 00000533 88E9                    	mov 	cl,ch
+   657                                  	left_edge
+    46 00000535 B002                <1>  mov al,00002h
+    47 00000537 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 0000053B EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000053C C1EF02              <1>  shr di,2
+    51 0000053F 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000541 88E8                <1>  mov al,ch
+    54 00000543 AA                  <1>  stosb
+   658                                  	middle
+    41 00000544 B802FF              <1>  mov ax,0ff02h
+    42 00000547 EF                  <1>  out dx,ax
+   659 00000548 6689C8                  	mov 	eax,ecx
+   660 0000054B AB                      	stosw
+   661 0000054C B90300                  	mov	cx,3
+   662 0000054F F366AB                  	rep	stosd
+   663 00000552 89C1                    	mov 	cx,ax
+   664                                  	right_edge
+    58 00000554 B002                <1>  mov al,00002h
+    59 00000556 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000055A EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000055B 88E8                <1>  mov al,ch
+    63 0000055D AA                  <1>  stosb
+   665 0000055E E989FD                  	jmp 	Fill.fillcont
+   666                                  Jump064:
+   667 00000561 88E9                    	mov 	cl,ch
+   668                                  	left_edge
+    46 00000563 B002                <1>  mov al,00002h
+    47 00000565 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000569 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000056A C1EF02              <1>  shr di,2
+    51 0000056D 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000056F 88E8                <1>  mov al,ch
+    54 00000571 AA                  <1>  stosb
+   669                                  	middle
+    41 00000572 B802FF              <1>  mov ax,0ff02h
+    42 00000575 EF                  <1>  out dx,ax
+   670 00000576 6689C8                  	mov 	eax,ecx
+   671 00000579 AA                      	stosb
+   672 0000057A AB                      	stosw
+   673 0000057B B90300                  	mov	cx,3
+   674 0000057E F366AB                  	rep	stosd
+   675 00000581 89C1                    	mov 	cx,ax
+   676                                  	right_edge
+    58 00000583 B002                <1>  mov al,00002h
+    59 00000585 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000589 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000058A 88E8                <1>  mov al,ch
+    63 0000058C AA                  <1>  stosb
+   677 0000058D E95AFD                  	jmp 	Fill.fillcont
+   678                                  Jump068:
+   679 00000590 88E9                    	mov 	cl,ch
+   680                                  	left_edge
+    46 00000592 B002                <1>  mov al,00002h
+    47 00000594 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000598 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000599 C1EF02              <1>  shr di,2
+    51 0000059C 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000059E 88E8                <1>  mov al,ch
+    54 000005A0 AA                  <1>  stosb
+   681                                  	middle
+    41 000005A1 B802FF              <1>  mov ax,0ff02h
+    42 000005A4 EF                  <1>  out dx,ax
+   682 000005A5 6689C8                  	mov 	eax,ecx
+   683 000005A8 B90400                  	mov	cx,4
+   684 000005AB F366AB                  	rep	stosd
+   685 000005AE 89C1                    	mov 	cx,ax
+   686                                  	right_edge
+    58 000005B0 B002                <1>  mov al,00002h
+    59 000005B2 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000005B6 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000005B7 88E8                <1>  mov al,ch
+    63 000005B9 AA                  <1>  stosb
+   687 000005BA E92DFD                  	jmp 	Fill.fillcont
+   688                                  Jump072:
+   689 000005BD 88E9                    	mov 	cl,ch
+   690                                  	left_edge
+    46 000005BF B002                <1>  mov al,00002h
+    47 000005C1 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000005C5 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000005C6 C1EF02              <1>  shr di,2
+    51 000005C9 01F7                <1>  add di,si
+    52                              <1> 
+    53 000005CB 88E8                <1>  mov al,ch
+    54 000005CD AA                  <1>  stosb
+   691                                  	middle
+    41 000005CE B802FF              <1>  mov ax,0ff02h
+    42 000005D1 EF                  <1>  out dx,ax
+   692 000005D2 6689C8                  	mov 	eax,ecx
+   693 000005D5 AA                      	stosb
+   694 000005D6 B90400                  	mov	cx,4
+   695 000005D9 F366AB                  	rep	stosd
+   696 000005DC 89C1                    	mov 	cx,ax
+   697                                  	right_edge
+    58 000005DE B002                <1>  mov al,00002h
+    59 000005E0 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000005E4 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000005E5 88E8                <1>  mov al,ch
+    63 000005E7 AA                  <1>  stosb
+   698 000005E8 E9FFFC                  	jmp 	Fill.fillcont
+   699                                  Jump076:
+   700 000005EB 88E9                    	mov 	cl,ch
+   701                                  	left_edge
+    46 000005ED B002                <1>  mov al,00002h
+    47 000005EF 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000005F3 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000005F4 C1EF02              <1>  shr di,2
+    51 000005F7 01F7                <1>  add di,si
+    52                              <1> 
+    53 000005F9 88E8                <1>  mov al,ch
+    54 000005FB AA                  <1>  stosb
+   702                                  	middle
+    41 000005FC B802FF              <1>  mov ax,0ff02h
+    42 000005FF EF                  <1>  out dx,ax
+   703 00000600 6689C8                  	mov 	eax,ecx
+   704 00000603 AB                      	stosw
+   705 00000604 B90400                  	mov	cx,4
+   706 00000607 F366AB                  	rep	stosd
+   707 0000060A 89C1                    	mov 	cx,ax
+   708                                  	right_edge
+    58 0000060C B002                <1>  mov al,00002h
+    59 0000060E 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000612 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000613 88E8                <1>  mov al,ch
+    63 00000615 AA                  <1>  stosb
+   709 00000616 E9D1FC                  	jmp 	Fill.fillcont
+   710                                  Jump080:
+   711 00000619 88E9                    	mov 	cl,ch
+   712                                  	left_edge
+    46 0000061B B002                <1>  mov al,00002h
+    47 0000061D 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000621 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000622 C1EF02              <1>  shr di,2
+    51 00000625 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000627 88E8                <1>  mov al,ch
+    54 00000629 AA                  <1>  stosb
+   713                                  	middle
+    41 0000062A B802FF              <1>  mov ax,0ff02h
+    42 0000062D EF                  <1>  out dx,ax
+   714 0000062E 6689C8                  	mov 	eax,ecx
+   715 00000631 AA                      	stosb
+   716 00000632 AB                      	stosw
+   717 00000633 B90400                  	mov	cx,4
+   718 00000636 F366AB                  	rep	stosd
+   719 00000639 89C1                    	mov 	cx,ax
+   720                                  	right_edge
+    58 0000063B B002                <1>  mov al,00002h
+    59 0000063D 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000641 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000642 88E8                <1>  mov al,ch
+    63 00000644 AA                  <1>  stosb
+   721 00000645 E9A2FC                  	jmp 	Fill.fillcont
+   722                                  Jump084:
+   723 00000648 88E9                    	mov 	cl,ch
+   724                                  	left_edge
+    46 0000064A B002                <1>  mov al,00002h
+    47 0000064C 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000650 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000651 C1EF02              <1>  shr di,2
+    51 00000654 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000656 88E8                <1>  mov al,ch
+    54 00000658 AA                  <1>  stosb
+   725                                  	middle
+    41 00000659 B802FF              <1>  mov ax,0ff02h
+    42 0000065C EF                  <1>  out dx,ax
+   726 0000065D 6689C8                  	mov 	eax,ecx
+   727 00000660 B90500                  	mov	cx,5
+   728 00000663 F366AB                  	rep	stosd
+   729 00000666 89C1                    	mov 	cx,ax
+   730                                  	right_edge
+    58 00000668 B002                <1>  mov al,00002h
+    59 0000066A 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000066E EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000066F 88E8                <1>  mov al,ch
+    63 00000671 AA                  <1>  stosb
+   731 00000672 E975FC                  	jmp 	Fill.fillcont
+   732                                  Jump088:
+   733 00000675 88E9                    	mov 	cl,ch
+   734                                  	left_edge
+    46 00000677 B002                <1>  mov al,00002h
+    47 00000679 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 0000067D EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000067E C1EF02              <1>  shr di,2
+    51 00000681 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000683 88E8                <1>  mov al,ch
+    54 00000685 AA                  <1>  stosb
+   735                                  	middle
+    41 00000686 B802FF              <1>  mov ax,0ff02h
+    42 00000689 EF                  <1>  out dx,ax
+   736 0000068A 6689C8                  	mov 	eax,ecx
+   737 0000068D AA                      	stosb
+   738 0000068E B90500                  	mov	cx,5
+   739 00000691 F366AB                  	rep	stosd
+   740 00000694 89C1                    	mov 	cx,ax
+   741                                  	right_edge
+    58 00000696 B002                <1>  mov al,00002h
+    59 00000698 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000069C EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000069D 88E8                <1>  mov al,ch
+    63 0000069F AA                  <1>  stosb
+   742 000006A0 E947FC                  	jmp 	Fill.fillcont
+   743                                  Jump092:
+   744 000006A3 88E9                    	mov 	cl,ch
+   745                                  	left_edge
+    46 000006A5 B002                <1>  mov al,00002h
+    47 000006A7 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000006AB EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000006AC C1EF02              <1>  shr di,2
+    51 000006AF 01F7                <1>  add di,si
+    52                              <1> 
+    53 000006B1 88E8                <1>  mov al,ch
+    54 000006B3 AA                  <1>  stosb
+   746                                  	middle
+    41 000006B4 B802FF              <1>  mov ax,0ff02h
+    42 000006B7 EF                  <1>  out dx,ax
+   747 000006B8 6689C8                  	mov 	eax,ecx
+   748 000006BB AB                      	stosw
+   749 000006BC B90500                  	mov	cx,5
+   750 000006BF F366AB                  	rep	stosd
+   751 000006C2 89C1                    	mov 	cx,ax
+   752                                  	right_edge
+    58 000006C4 B002                <1>  mov al,00002h
+    59 000006C6 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000006CA EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000006CB 88E8                <1>  mov al,ch
+    63 000006CD AA                  <1>  stosb
+   753 000006CE E919FC                  	jmp 	Fill.fillcont
+   754                                  Jump096:
+   755 000006D1 88E9                    	mov 	cl,ch
+   756                                  	left_edge
+    46 000006D3 B002                <1>  mov al,00002h
+    47 000006D5 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000006D9 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000006DA C1EF02              <1>  shr di,2
+    51 000006DD 01F7                <1>  add di,si
+    52                              <1> 
+    53 000006DF 88E8                <1>  mov al,ch
+    54 000006E1 AA                  <1>  stosb
+   757                                  	middle
+    41 000006E2 B802FF              <1>  mov ax,0ff02h
+    42 000006E5 EF                  <1>  out dx,ax
+   758 000006E6 6689C8                  	mov 	eax,ecx
+   759 000006E9 AA                      	stosb
+   760 000006EA AB                      	stosw
+   761 000006EB B90500                  	mov	cx,5
+   762 000006EE F366AB                  	rep	stosd
+   763 000006F1 89C1                    	mov 	cx,ax
+   764                                  	right_edge
+    58 000006F3 B002                <1>  mov al,00002h
+    59 000006F5 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000006F9 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000006FA 88E8                <1>  mov al,ch
+    63 000006FC AA                  <1>  stosb
+   765 000006FD E9EAFB                  	jmp 	Fill.fillcont
+   766                                  Jump100:
+   767 00000700 88E9                    	mov 	cl,ch
+   768                                  	left_edge
+    46 00000702 B002                <1>  mov al,00002h
+    47 00000704 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000708 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000709 C1EF02              <1>  shr di,2
+    51 0000070C 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000070E 88E8                <1>  mov al,ch
+    54 00000710 AA                  <1>  stosb
+   769                                  	middle
+    41 00000711 B802FF              <1>  mov ax,0ff02h
+    42 00000714 EF                  <1>  out dx,ax
+   770 00000715 6689C8                  	mov 	eax,ecx
+   771 00000718 B90600                  	mov	cx,6
+   772 0000071B F366AB                  	rep	stosd
+   773 0000071E 89C1                    	mov 	cx,ax
+   774                                  	right_edge
+    58 00000720 B002                <1>  mov al,00002h
+    59 00000722 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000726 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000727 88E8                <1>  mov al,ch
+    63 00000729 AA                  <1>  stosb
+   775 0000072A E9BDFB                  	jmp 	Fill.fillcont
+   776                                  Jump104:
+   777 0000072D 88E9                    	mov 	cl,ch
+   778                                  	left_edge
+    46 0000072F B002                <1>  mov al,00002h
+    47 00000731 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000735 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000736 C1EF02              <1>  shr di,2
+    51 00000739 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000073B 88E8                <1>  mov al,ch
+    54 0000073D AA                  <1>  stosb
+   779                                  	middle
+    41 0000073E B802FF              <1>  mov ax,0ff02h
+    42 00000741 EF                  <1>  out dx,ax
+   780 00000742 6689C8                  	mov 	eax,ecx
+   781 00000745 AA                      	stosb
+   782 00000746 B90600                  	mov	cx,6
+   783 00000749 F366AB                  	rep	stosd
+   784 0000074C 89C1                    	mov 	cx,ax
+   785                                  	right_edge
+    58 0000074E B002                <1>  mov al,00002h
+    59 00000750 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000754 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000755 88E8                <1>  mov al,ch
+    63 00000757 AA                  <1>  stosb
+   786 00000758 E98FFB                  	jmp 	Fill.fillcont
+   787                                  Jump108:
+   788 0000075B 88E9                    	mov 	cl,ch
+   789                                  	left_edge
+    46 0000075D B002                <1>  mov al,00002h
+    47 0000075F 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000763 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000764 C1EF02              <1>  shr di,2
+    51 00000767 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000769 88E8                <1>  mov al,ch
+    54 0000076B AA                  <1>  stosb
+   790                                  	middle
+    41 0000076C B802FF              <1>  mov ax,0ff02h
+    42 0000076F EF                  <1>  out dx,ax
+   791 00000770 6689C8                  	mov 	eax,ecx
+   792 00000773 AB                      	stosw
+   793 00000774 B90600                  	mov	cx,6
+   794 00000777 F366AB                  	rep	stosd
+   795 0000077A 89C1                    	mov 	cx,ax
+   796                                  	right_edge
+    58 0000077C B002                <1>  mov al,00002h
+    59 0000077E 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000782 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000783 88E8                <1>  mov al,ch
+    63 00000785 AA                  <1>  stosb
+   797 00000786 E961FB                  	jmp 	Fill.fillcont
+   798                                  Jump112:
+   799 00000789 88E9                    	mov 	cl,ch
+   800                                  	left_edge
+    46 0000078B B002                <1>  mov al,00002h
+    47 0000078D 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000791 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000792 C1EF02              <1>  shr di,2
+    51 00000795 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000797 88E8                <1>  mov al,ch
+    54 00000799 AA                  <1>  stosb
+   801                                  	middle
+    41 0000079A B802FF              <1>  mov ax,0ff02h
+    42 0000079D EF                  <1>  out dx,ax
+   802 0000079E 6689C8                  	mov 	eax,ecx
+   803 000007A1 AA                      	stosb
+   804 000007A2 AB                      	stosw
+   805 000007A3 B90600                  	mov	cx,6
+   806 000007A6 F366AB                  	rep	stosd
+   807 000007A9 89C1                    	mov 	cx,ax
+   808                                  	right_edge
+    58 000007AB B002                <1>  mov al,00002h
+    59 000007AD 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000007B1 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000007B2 88E8                <1>  mov al,ch
+    63 000007B4 AA                  <1>  stosb
+   809 000007B5 E932FB                  	jmp 	Fill.fillcont
+   810                                  Jump116:
+   811 000007B8 88E9                    	mov 	cl,ch
+   812                                  	left_edge
+    46 000007BA B002                <1>  mov al,00002h
+    47 000007BC 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000007C0 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000007C1 C1EF02              <1>  shr di,2
+    51 000007C4 01F7                <1>  add di,si
+    52                              <1> 
+    53 000007C6 88E8                <1>  mov al,ch
+    54 000007C8 AA                  <1>  stosb
+   813                                  	middle
+    41 000007C9 B802FF              <1>  mov ax,0ff02h
+    42 000007CC EF                  <1>  out dx,ax
+   814 000007CD 6689C8                  	mov 	eax,ecx
+   815 000007D0 B90700                  	mov	cx,7
+   816 000007D3 F366AB                  	rep	stosd
+   817 000007D6 89C1                    	mov 	cx,ax
+   818                                  	right_edge
+    58 000007D8 B002                <1>  mov al,00002h
+    59 000007DA 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000007DE EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000007DF 88E8                <1>  mov al,ch
+    63 000007E1 AA                  <1>  stosb
+   819 000007E2 E905FB                  	jmp 	Fill.fillcont
+   820                                  Jump120:
+   821 000007E5 88E9                    	mov 	cl,ch
+   822                                  	left_edge
+    46 000007E7 B002                <1>  mov al,00002h
+    47 000007E9 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000007ED EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000007EE C1EF02              <1>  shr di,2
+    51 000007F1 01F7                <1>  add di,si
+    52                              <1> 
+    53 000007F3 88E8                <1>  mov al,ch
+    54 000007F5 AA                  <1>  stosb
+   823                                  	middle
+    41 000007F6 B802FF              <1>  mov ax,0ff02h
+    42 000007F9 EF                  <1>  out dx,ax
+   824 000007FA 6689C8                  	mov 	eax,ecx
+   825 000007FD AA                      	stosb
+   826 000007FE B90700                  	mov	cx,7
+   827 00000801 F366AB                  	rep	stosd
+   828 00000804 89C1                    	mov 	cx,ax
+   829                                  	right_edge
+    58 00000806 B002                <1>  mov al,00002h
+    59 00000808 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000080C EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000080D 88E8                <1>  mov al,ch
+    63 0000080F AA                  <1>  stosb
+   830 00000810 E9D7FA                  	jmp 	Fill.fillcont
+   831                                  Jump124:
+   832 00000813 88E9                    	mov 	cl,ch
+   833                                  	left_edge
+    46 00000815 B002                <1>  mov al,00002h
+    47 00000817 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 0000081B EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000081C C1EF02              <1>  shr di,2
+    51 0000081F 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000821 88E8                <1>  mov al,ch
+    54 00000823 AA                  <1>  stosb
+   834                                  	middle
+    41 00000824 B802FF              <1>  mov ax,0ff02h
+    42 00000827 EF                  <1>  out dx,ax
+   835 00000828 6689C8                  	mov 	eax,ecx
+   836 0000082B AB                      	stosw
+   837 0000082C B90700                  	mov	cx,7
+   838 0000082F F366AB                  	rep	stosd
+   839 00000832 89C1                    	mov 	cx,ax
+   840                                  	right_edge
+    58 00000834 B002                <1>  mov al,00002h
+    59 00000836 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000083A EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000083B 88E8                <1>  mov al,ch
+    63 0000083D AA                  <1>  stosb
+   841 0000083E E9A9FA                  	jmp 	Fill.fillcont
+   842                                  Jump128:
+   843 00000841 88E9                    	mov 	cl,ch
+   844                                  	left_edge
+    46 00000843 B002                <1>  mov al,00002h
+    47 00000845 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000849 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000084A C1EF02              <1>  shr di,2
+    51 0000084D 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000084F 88E8                <1>  mov al,ch
+    54 00000851 AA                  <1>  stosb
+   845                                  	middle
+    41 00000852 B802FF              <1>  mov ax,0ff02h
+    42 00000855 EF                  <1>  out dx,ax
+   846 00000856 6689C8                  	mov 	eax,ecx
+   847 00000859 AA                      	stosb
+   848 0000085A AB                      	stosw
+   849 0000085B B90700                  	mov	cx,7
+   850 0000085E F366AB                  	rep	stosd
+   851 00000861 89C1                    	mov 	cx,ax
+   852                                  	right_edge
+    58 00000863 B002                <1>  mov al,00002h
+    59 00000865 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000869 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000086A 88E8                <1>  mov al,ch
+    63 0000086C AA                  <1>  stosb
+   853 0000086D E97AFA                  	jmp 	Fill.fillcont
+   854                                  Jump132:
+   855 00000870 88E9                    	mov 	cl,ch
+   856                                  	left_edge
+    46 00000872 B002                <1>  mov al,00002h
+    47 00000874 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000878 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000879 C1EF02              <1>  shr di,2
+    51 0000087C 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000087E 88E8                <1>  mov al,ch
+    54 00000880 AA                  <1>  stosb
+   857                                  	middle
+    41 00000881 B802FF              <1>  mov ax,0ff02h
+    42 00000884 EF                  <1>  out dx,ax
+   858 00000885 6689C8                  	mov 	eax,ecx
+   859 00000888 B90800                  	mov	cx,8
+   860 0000088B F366AB                  	rep	stosd
+   861 0000088E 89C1                    	mov 	cx,ax
+   862                                  	right_edge
+    58 00000890 B002                <1>  mov al,00002h
+    59 00000892 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000896 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000897 88E8                <1>  mov al,ch
+    63 00000899 AA                  <1>  stosb
+   863 0000089A E94DFA                  	jmp 	Fill.fillcont
+   864                                  Jump136:
+   865 0000089D 88E9                    	mov 	cl,ch
+   866                                  	left_edge
+    46 0000089F B002                <1>  mov al,00002h
+    47 000008A1 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000008A5 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000008A6 C1EF02              <1>  shr di,2
+    51 000008A9 01F7                <1>  add di,si
+    52                              <1> 
+    53 000008AB 88E8                <1>  mov al,ch
+    54 000008AD AA                  <1>  stosb
+   867                                  	middle
+    41 000008AE B802FF              <1>  mov ax,0ff02h
+    42 000008B1 EF                  <1>  out dx,ax
+   868 000008B2 6689C8                  	mov 	eax,ecx
+   869 000008B5 AA                      	stosb
+   870 000008B6 B90800                  	mov	cx,8
+   871 000008B9 F366AB                  	rep	stosd
+   872 000008BC 89C1                    	mov 	cx,ax
+   873                                  	right_edge
+    58 000008BE B002                <1>  mov al,00002h
+    59 000008C0 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000008C4 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000008C5 88E8                <1>  mov al,ch
+    63 000008C7 AA                  <1>  stosb
+   874 000008C8 E91FFA                  	jmp 	Fill.fillcont
+   875                                  Jump140:
+   876 000008CB 88E9                    	mov 	cl,ch
+   877                                  	left_edge
+    46 000008CD B002                <1>  mov al,00002h
+    47 000008CF 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000008D3 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000008D4 C1EF02              <1>  shr di,2
+    51 000008D7 01F7                <1>  add di,si
+    52                              <1> 
+    53 000008D9 88E8                <1>  mov al,ch
+    54 000008DB AA                  <1>  stosb
+   878                                  	middle
+    41 000008DC B802FF              <1>  mov ax,0ff02h
+    42 000008DF EF                  <1>  out dx,ax
+   879 000008E0 6689C8                  	mov 	eax,ecx
+   880 000008E3 AB                      	stosw
+   881 000008E4 B90800                  	mov	cx,8
+   882 000008E7 F366AB                  	rep	stosd
+   883 000008EA 89C1                    	mov 	cx,ax
+   884                                  	right_edge
+    58 000008EC B002                <1>  mov al,00002h
+    59 000008EE 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000008F2 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000008F3 88E8                <1>  mov al,ch
+    63 000008F5 AA                  <1>  stosb
+   885 000008F6 E9F1F9                  	jmp 	Fill.fillcont
+   886                                  Jump144:
+   887 000008F9 88E9                    	mov 	cl,ch
+   888                                  	left_edge
+    46 000008FB B002                <1>  mov al,00002h
+    47 000008FD 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000901 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000902 C1EF02              <1>  shr di,2
+    51 00000905 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000907 88E8                <1>  mov al,ch
+    54 00000909 AA                  <1>  stosb
+   889                                  	middle
+    41 0000090A B802FF              <1>  mov ax,0ff02h
+    42 0000090D EF                  <1>  out dx,ax
+   890 0000090E 6689C8                  	mov 	eax,ecx
+   891 00000911 AA                      	stosb
+   892 00000912 AB                      	stosw
+   893 00000913 B90800                  	mov	cx,8
+   894 00000916 F366AB                  	rep	stosd
+   895 00000919 89C1                    	mov 	cx,ax
+   896                                  	right_edge
+    58 0000091B B002                <1>  mov al,00002h
+    59 0000091D 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000921 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000922 88E8                <1>  mov al,ch
+    63 00000924 AA                  <1>  stosb
+   897 00000925 E9C2F9                  	jmp 	Fill.fillcont
+   898                                  
+   899                                  Jump148:
+   900 00000928 88E9                    	mov 	cl,ch
+   901                                  	left_edge
+    46 0000092A B002                <1>  mov al,00002h
+    47 0000092C 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000930 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000931 C1EF02              <1>  shr di,2
+    51 00000934 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000936 88E8                <1>  mov al,ch
+    54 00000938 AA                  <1>  stosb
+   902                                  	middle
+    41 00000939 B802FF              <1>  mov ax,0ff02h
+    42 0000093C EF                  <1>  out dx,ax
+   903 0000093D 6689C8                  	mov 	eax,ecx
+   904 00000940 B90900                  	mov	cx,9
+   905 00000943 F366AB                  	rep	stosd
+   906 00000946 89C1                    	mov 	cx,ax
+   907                                  	right_edge
+    58 00000948 B002                <1>  mov al,00002h
+    59 0000094A 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000094E EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000094F 88E8                <1>  mov al,ch
+    63 00000951 AA                  <1>  stosb
+   908 00000952 E995F9                  	jmp 	Fill.fillcont
+   909                                  Jump152:
+   910 00000955 88E9                    	mov 	cl,ch
+   911                                  	left_edge
+    46 00000957 B002                <1>  mov al,00002h
+    47 00000959 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 0000095D EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000095E C1EF02              <1>  shr di,2
+    51 00000961 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000963 88E8                <1>  mov al,ch
+    54 00000965 AA                  <1>  stosb
+   912                                  	middle
+    41 00000966 B802FF              <1>  mov ax,0ff02h
+    42 00000969 EF                  <1>  out dx,ax
+   913 0000096A 6689C8                  	mov 	eax,ecx
+   914 0000096D AA                      	stosb
+   915 0000096E B90900                  	mov	cx,9
+   916 00000971 F366AB                  	rep	stosd
+   917 00000974 89C1                    	mov 	cx,ax
+   918                                  	right_edge
+    58 00000976 B002                <1>  mov al,00002h
+    59 00000978 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000097C EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000097D 88E8                <1>  mov al,ch
+    63 0000097F AA                  <1>  stosb
+   919 00000980 E967F9                  	jmp 	Fill.fillcont
+   920                                  Jump156:
+   921 00000983 88E9                    	mov 	cl,ch
+   922                                  	left_edge
+    46 00000985 B002                <1>  mov al,00002h
+    47 00000987 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 0000098B EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000098C C1EF02              <1>  shr di,2
+    51 0000098F 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000991 88E8                <1>  mov al,ch
+    54 00000993 AA                  <1>  stosb
+   923                                  	middle
+    41 00000994 B802FF              <1>  mov ax,0ff02h
+    42 00000997 EF                  <1>  out dx,ax
+   924 00000998 6689C8                  	mov 	eax,ecx
+   925 0000099B AB                      	stosw
+   926 0000099C B90900                  	mov	cx,9
+   927 0000099F F366AB                  	rep	stosd
+   928 000009A2 89C1                    	mov 	cx,ax
+   929                                  	right_edge
+    58 000009A4 B002                <1>  mov al,00002h
+    59 000009A6 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000009AA EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000009AB 88E8                <1>  mov al,ch
+    63 000009AD AA                  <1>  stosb
+   930 000009AE E939F9                  	jmp 	Fill.fillcont
+   931                                  Jump160:
+   932 000009B1 88E9                    	mov 	cl,ch
+   933                                  	left_edge
+    46 000009B3 B002                <1>  mov al,00002h
+    47 000009B5 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000009B9 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000009BA C1EF02              <1>  shr di,2
+    51 000009BD 01F7                <1>  add di,si
+    52                              <1> 
+    53 000009BF 88E8                <1>  mov al,ch
+    54 000009C1 AA                  <1>  stosb
+   934                                  	middle
+    41 000009C2 B802FF              <1>  mov ax,0ff02h
+    42 000009C5 EF                  <1>  out dx,ax
+   935 000009C6 6689C8                  	mov 	eax,ecx
+   936 000009C9 AA                      	stosb
+   937 000009CA AB                      	stosw
+   938 000009CB B90900                  	mov	cx,9
+   939 000009CE F366AB                  	rep	stosd
+   940 000009D1 89C1                    	mov 	cx,ax
+   941                                  	right_edge
+    58 000009D3 B002                <1>  mov al,00002h
+    59 000009D5 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000009D9 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000009DA 88E8                <1>  mov al,ch
+    63 000009DC AA                  <1>  stosb
+   942 000009DD E90AF9                  	jmp 	Fill.fillcont
+   943                                  
+   944                                  Jump164:
+   945 000009E0 88E9                    	mov 	cl,ch
+   946                                  	left_edge
+    46 000009E2 B002                <1>  mov al,00002h
+    47 000009E4 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000009E8 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000009E9 C1EF02              <1>  shr di,2
+    51 000009EC 01F7                <1>  add di,si
+    52                              <1> 
+    53 000009EE 88E8                <1>  mov al,ch
+    54 000009F0 AA                  <1>  stosb
+   947                                  	middle
+    41 000009F1 B802FF              <1>  mov ax,0ff02h
+    42 000009F4 EF                  <1>  out dx,ax
+   948 000009F5 6689C8                  	mov 	eax,ecx
+   949 000009F8 B90A00                  	mov	cx,10
+   950 000009FB F366AB                  	rep	stosd
+   951 000009FE 89C1                    	mov 	cx,ax
+   952                                  	right_edge
+    58 00000A00 B002                <1>  mov al,00002h
+    59 00000A02 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000A06 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000A07 88E8                <1>  mov al,ch
+    63 00000A09 AA                  <1>  stosb
+   953 00000A0A E9DDF8                  	jmp 	Fill.fillcont
+   954                                  Jump168:
+   955 00000A0D 88E9                    	mov 	cl,ch
+   956                                  	left_edge
+    46 00000A0F B002                <1>  mov al,00002h
+    47 00000A11 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000A15 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000A16 C1EF02              <1>  shr di,2
+    51 00000A19 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000A1B 88E8                <1>  mov al,ch
+    54 00000A1D AA                  <1>  stosb
+   957                                  	middle
+    41 00000A1E B802FF              <1>  mov ax,0ff02h
+    42 00000A21 EF                  <1>  out dx,ax
+   958 00000A22 6689C8                  	mov 	eax,ecx
+   959 00000A25 AA                      	stosb
+   960 00000A26 B90A00                  	mov	cx,10
+   961 00000A29 F366AB                  	rep	stosd
+   962 00000A2C 89C1                    	mov 	cx,ax
+   963                                  	right_edge
+    58 00000A2E B002                <1>  mov al,00002h
+    59 00000A30 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000A34 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000A35 88E8                <1>  mov al,ch
+    63 00000A37 AA                  <1>  stosb
+   964 00000A38 E9AFF8                  	jmp 	Fill.fillcont
+   965                                  Jump172:
+   966 00000A3B 88E9                    	mov 	cl,ch
+   967                                  	left_edge
+    46 00000A3D B002                <1>  mov al,00002h
+    47 00000A3F 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000A43 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000A44 C1EF02              <1>  shr di,2
+    51 00000A47 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000A49 88E8                <1>  mov al,ch
+    54 00000A4B AA                  <1>  stosb
+   968                                  	middle
+    41 00000A4C B802FF              <1>  mov ax,0ff02h
+    42 00000A4F EF                  <1>  out dx,ax
+   969 00000A50 6689C8                  	mov 	eax,ecx
+   970 00000A53 AB                      	stosw
+   971 00000A54 B90A00                  	mov	cx,10
+   972 00000A57 F366AB                  	rep	stosd
+   973 00000A5A 89C1                    	mov 	cx,ax
+   974                                  	right_edge
+    58 00000A5C B002                <1>  mov al,00002h
+    59 00000A5E 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000A62 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000A63 88E8                <1>  mov al,ch
+    63 00000A65 AA                  <1>  stosb
+   975 00000A66 E981F8                  	jmp 	Fill.fillcont
+   976                                  Jump176:
+   977 00000A69 88E9                    	mov 	cl,ch
+   978                                  	left_edge
+    46 00000A6B B002                <1>  mov al,00002h
+    47 00000A6D 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000A71 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000A72 C1EF02              <1>  shr di,2
+    51 00000A75 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000A77 88E8                <1>  mov al,ch
+    54 00000A79 AA                  <1>  stosb
+   979                                  	middle
+    41 00000A7A B802FF              <1>  mov ax,0ff02h
+    42 00000A7D EF                  <1>  out dx,ax
+   980 00000A7E 6689C8                  	mov 	eax,ecx
+   981 00000A81 AA                      	stosb
+   982 00000A82 AB                      	stosw
+   983 00000A83 B90A00                  	mov	cx,10
+   984 00000A86 F366AB                  	rep	stosd
+   985 00000A89 89C1                    	mov 	cx,ax
+   986                                  	right_edge
+    58 00000A8B B002                <1>  mov al,00002h
+    59 00000A8D 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000A91 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000A92 88E8                <1>  mov al,ch
+    63 00000A94 AA                  <1>  stosb
+   987 00000A95 E952F8                  	jmp 	Fill.fillcont
+   988                                  
+   989                                  Jump180:
+   990 00000A98 88E9                    	mov 	cl,ch
+   991                                  	left_edge
+    46 00000A9A B002                <1>  mov al,00002h
+    47 00000A9C 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000AA0 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000AA1 C1EF02              <1>  shr di,2
+    51 00000AA4 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000AA6 88E8                <1>  mov al,ch
+    54 00000AA8 AA                  <1>  stosb
+   992                                  	middle
+    41 00000AA9 B802FF              <1>  mov ax,0ff02h
+    42 00000AAC EF                  <1>  out dx,ax
+   993 00000AAD 6689C8                  	mov 	eax,ecx
+   994 00000AB0 B90B00                  	mov	cx,11
+   995 00000AB3 F366AB                  	rep	stosd
+   996 00000AB6 89C1                    	mov 	cx,ax
+   997                                  	right_edge
+    58 00000AB8 B002                <1>  mov al,00002h
+    59 00000ABA 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000ABE EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000ABF 88E8                <1>  mov al,ch
+    63 00000AC1 AA                  <1>  stosb
+   998 00000AC2 E925F8                  	jmp 	Fill.fillcont
+   999                                  Jump184:
+  1000 00000AC5 88E9                    	mov 	cl,ch
+  1001                                  	left_edge
+    46 00000AC7 B002                <1>  mov al,00002h
+    47 00000AC9 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000ACD EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000ACE C1EF02              <1>  shr di,2
+    51 00000AD1 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000AD3 88E8                <1>  mov al,ch
+    54 00000AD5 AA                  <1>  stosb
+  1002                                  	middle
+    41 00000AD6 B802FF              <1>  mov ax,0ff02h
+    42 00000AD9 EF                  <1>  out dx,ax
+  1003 00000ADA 6689C8                  	mov 	eax,ecx
+  1004 00000ADD AA                      	stosb
+  1005 00000ADE B90B00                  	mov	cx,11
+  1006 00000AE1 F366AB                  	rep	stosd
+  1007 00000AE4 89C1                    	mov 	cx,ax
+  1008                                  	right_edge
+    58 00000AE6 B002                <1>  mov al,00002h
+    59 00000AE8 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000AEC EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000AED 88E8                <1>  mov al,ch
+    63 00000AEF AA                  <1>  stosb
+  1009 00000AF0 E9F7F7                  	jmp 	Fill.fillcont
+  1010                                  Jump188:
+  1011 00000AF3 88E9                    	mov 	cl,ch
+  1012                                  	left_edge
+    46 00000AF5 B002                <1>  mov al,00002h
+    47 00000AF7 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000AFB EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000AFC C1EF02              <1>  shr di,2
+    51 00000AFF 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000B01 88E8                <1>  mov al,ch
+    54 00000B03 AA                  <1>  stosb
+  1013                                  	middle
+    41 00000B04 B802FF              <1>  mov ax,0ff02h
+    42 00000B07 EF                  <1>  out dx,ax
+  1014 00000B08 6689C8                  	mov 	eax,ecx
+  1015 00000B0B AB                      	stosw
+  1016 00000B0C B90B00                  	mov	cx,11
+  1017 00000B0F F366AB                  	rep	stosd
+  1018 00000B12 89C1                    	mov 	cx,ax
+  1019                                  	right_edge
+    58 00000B14 B002                <1>  mov al,00002h
+    59 00000B16 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000B1A EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000B1B 88E8                <1>  mov al,ch
+    63 00000B1D AA                  <1>  stosb
+  1020 00000B1E E9C9F7                  	jmp 	Fill.fillcont
+  1021                                  Jump192:
+  1022 00000B21 88E9                    	mov 	cl,ch
+  1023                                  	left_edge
+    46 00000B23 B002                <1>  mov al,00002h
+    47 00000B25 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000B29 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000B2A C1EF02              <1>  shr di,2
+    51 00000B2D 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000B2F 88E8                <1>  mov al,ch
+    54 00000B31 AA                  <1>  stosb
+  1024                                  	middle
+    41 00000B32 B802FF              <1>  mov ax,0ff02h
+    42 00000B35 EF                  <1>  out dx,ax
+  1025 00000B36 6689C8                  	mov 	eax,ecx
+  1026 00000B39 AA                      	stosb
+  1027 00000B3A AB                      	stosw
+  1028 00000B3B B90B00                  	mov	cx,11
+  1029 00000B3E F366AB                  	rep	stosd
+  1030 00000B41 89C1                    	mov 	cx,ax
+  1031                                  	right_edge
+    58 00000B43 B002                <1>  mov al,00002h
+    59 00000B45 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000B49 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000B4A 88E8                <1>  mov al,ch
+    63 00000B4C AA                  <1>  stosb
+  1032 00000B4D E99AF7                  	jmp 	Fill.fillcont
+  1033                                  
+  1034                                  Jump196:
+  1035 00000B50 88E9                    	mov 	cl,ch
+  1036                                  	left_edge
+    46 00000B52 B002                <1>  mov al,00002h
+    47 00000B54 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000B58 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000B59 C1EF02              <1>  shr di,2
+    51 00000B5C 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000B5E 88E8                <1>  mov al,ch
+    54 00000B60 AA                  <1>  stosb
+  1037                                  	middle
+    41 00000B61 B802FF              <1>  mov ax,0ff02h
+    42 00000B64 EF                  <1>  out dx,ax
+  1038 00000B65 6689C8                  	mov 	eax,ecx
+  1039 00000B68 B90C00                  	mov	cx,12
+  1040 00000B6B F366AB                  	rep	stosd
+  1041 00000B6E 89C1                    	mov 	cx,ax
+  1042                                  	right_edge
+    58 00000B70 B002                <1>  mov al,00002h
+    59 00000B72 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000B76 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000B77 88E8                <1>  mov al,ch
+    63 00000B79 AA                  <1>  stosb
+  1043 00000B7A E96DF7                  	jmp 	Fill.fillcont
+  1044                                  Jump200:
+  1045 00000B7D 88E9                    	mov 	cl,ch
+  1046                                  	left_edge
+    46 00000B7F B002                <1>  mov al,00002h
+    47 00000B81 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000B85 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000B86 C1EF02              <1>  shr di,2
+    51 00000B89 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000B8B 88E8                <1>  mov al,ch
+    54 00000B8D AA                  <1>  stosb
+  1047                                  	middle
+    41 00000B8E B802FF              <1>  mov ax,0ff02h
+    42 00000B91 EF                  <1>  out dx,ax
+  1048 00000B92 6689C8                  	mov 	eax,ecx
+  1049 00000B95 AA                      	stosb
+  1050 00000B96 B90C00                  	mov	cx,12
+  1051 00000B99 F366AB                  	rep	stosd
+  1052 00000B9C 89C1                    	mov 	cx,ax
+  1053                                  	right_edge
+    58 00000B9E B002                <1>  mov al,00002h
+    59 00000BA0 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000BA4 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000BA5 88E8                <1>  mov al,ch
+    63 00000BA7 AA                  <1>  stosb
+  1054 00000BA8 E93FF7                  	jmp 	Fill.fillcont
+  1055                                  Jump204:
+  1056 00000BAB 88E9                    	mov 	cl,ch
+  1057                                  	left_edge
+    46 00000BAD B002                <1>  mov al,00002h
+    47 00000BAF 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000BB3 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000BB4 C1EF02              <1>  shr di,2
+    51 00000BB7 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000BB9 88E8                <1>  mov al,ch
+    54 00000BBB AA                  <1>  stosb
+  1058                                  	middle
+    41 00000BBC B802FF              <1>  mov ax,0ff02h
+    42 00000BBF EF                  <1>  out dx,ax
+  1059 00000BC0 6689C8                  	mov 	eax,ecx
+  1060 00000BC3 AB                      	stosw
+  1061 00000BC4 B90C00                  	mov	cx,12
+  1062 00000BC7 F366AB                  	rep	stosd
+  1063 00000BCA 89C1                    	mov 	cx,ax
+  1064                                  	right_edge
+    58 00000BCC B002                <1>  mov al,00002h
+    59 00000BCE 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000BD2 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000BD3 88E8                <1>  mov al,ch
+    63 00000BD5 AA                  <1>  stosb
+  1065 00000BD6 E911F7                  	jmp 	Fill.fillcont
+  1066                                  Jump208:
+  1067 00000BD9 88E9                    	mov 	cl,ch
+  1068                                  	left_edge
+    46 00000BDB B002                <1>  mov al,00002h
+    47 00000BDD 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000BE1 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000BE2 C1EF02              <1>  shr di,2
+    51 00000BE5 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000BE7 88E8                <1>  mov al,ch
+    54 00000BE9 AA                  <1>  stosb
+  1069                                  	middle
+    41 00000BEA B802FF              <1>  mov ax,0ff02h
+    42 00000BED EF                  <1>  out dx,ax
+  1070 00000BEE 6689C8                  	mov 	eax,ecx
+  1071 00000BF1 AA                      	stosb
+  1072 00000BF2 AB                      	stosw
+  1073 00000BF3 B90C00                  	mov	cx,12
+  1074 00000BF6 F366AB                  	rep	stosd
+  1075 00000BF9 89C1                    	mov 	cx,ax
+  1076                                  	right_edge
+    58 00000BFB B002                <1>  mov al,00002h
+    59 00000BFD 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000C01 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000C02 88E8                <1>  mov al,ch
+    63 00000C04 AA                  <1>  stosb
+  1077 00000C05 E9E2F6                  	jmp 	Fill.fillcont
+  1078                                  
+  1079                                  Jump212:
+  1080 00000C08 88E9                    	mov 	cl,ch
+  1081                                  	left_edge
+    46 00000C0A B002                <1>  mov al,00002h
+    47 00000C0C 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000C10 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000C11 C1EF02              <1>  shr di,2
+    51 00000C14 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000C16 88E8                <1>  mov al,ch
+    54 00000C18 AA                  <1>  stosb
+  1082                                  	middle
+    41 00000C19 B802FF              <1>  mov ax,0ff02h
+    42 00000C1C EF                  <1>  out dx,ax
+  1083 00000C1D 6689C8                  	mov 	eax,ecx
+  1084 00000C20 B90D00                  	mov	cx,13
+  1085 00000C23 F366AB                  	rep	stosd
+  1086 00000C26 89C1                    	mov 	cx,ax
+  1087                                  	right_edge
+    58 00000C28 B002                <1>  mov al,00002h
+    59 00000C2A 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000C2E EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000C2F 88E8                <1>  mov al,ch
+    63 00000C31 AA                  <1>  stosb
+  1088 00000C32 E9B5F6                  	jmp 	Fill.fillcont
+  1089                                  Jump216:
+  1090 00000C35 88E9                    	mov 	cl,ch
+  1091                                  	left_edge
+    46 00000C37 B002                <1>  mov al,00002h
+    47 00000C39 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000C3D EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000C3E C1EF02              <1>  shr di,2
+    51 00000C41 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000C43 88E8                <1>  mov al,ch
+    54 00000C45 AA                  <1>  stosb
+  1092                                  	middle
+    41 00000C46 B802FF              <1>  mov ax,0ff02h
+    42 00000C49 EF                  <1>  out dx,ax
+  1093 00000C4A 6689C8                  	mov 	eax,ecx
+  1094 00000C4D AA                      	stosb
+  1095 00000C4E B90D00                  	mov	cx,13
+  1096 00000C51 F366AB                  	rep	stosd
+  1097 00000C54 89C1                    	mov 	cx,ax
+  1098                                  	right_edge
+    58 00000C56 B002                <1>  mov al,00002h
+    59 00000C58 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000C5C EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000C5D 88E8                <1>  mov al,ch
+    63 00000C5F AA                  <1>  stosb
+  1099 00000C60 E987F6                  	jmp 	Fill.fillcont
+  1100                                  Jump220:
+  1101 00000C63 88E9                    	mov 	cl,ch
+  1102                                  	left_edge
+    46 00000C65 B002                <1>  mov al,00002h
+    47 00000C67 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000C6B EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000C6C C1EF02              <1>  shr di,2
+    51 00000C6F 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000C71 88E8                <1>  mov al,ch
+    54 00000C73 AA                  <1>  stosb
+  1103                                  	middle
+    41 00000C74 B802FF              <1>  mov ax,0ff02h
+    42 00000C77 EF                  <1>  out dx,ax
+  1104 00000C78 6689C8                  	mov 	eax,ecx
+  1105 00000C7B AB                      	stosw
+  1106 00000C7C B90D00                  	mov	cx,13
+  1107 00000C7F F366AB                  	rep	stosd
+  1108 00000C82 89C1                    	mov 	cx,ax
+  1109                                  	right_edge
+    58 00000C84 B002                <1>  mov al,00002h
+    59 00000C86 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000C8A EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000C8B 88E8                <1>  mov al,ch
+    63 00000C8D AA                  <1>  stosb
+  1110 00000C8E E959F6                  	jmp 	Fill.fillcont
+  1111                                  Jump224:
+  1112 00000C91 88E9                    	mov 	cl,ch
+  1113                                  	left_edge
+    46 00000C93 B002                <1>  mov al,00002h
+    47 00000C95 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000C99 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000C9A C1EF02              <1>  shr di,2
+    51 00000C9D 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000C9F 88E8                <1>  mov al,ch
+    54 00000CA1 AA                  <1>  stosb
+  1114                                  	middle
+    41 00000CA2 B802FF              <1>  mov ax,0ff02h
+    42 00000CA5 EF                  <1>  out dx,ax
+  1115 00000CA6 6689C8                  	mov 	eax,ecx
+  1116 00000CA9 AA                      	stosb
+  1117 00000CAA AB                      	stosw
+  1118 00000CAB B90D00                  	mov	cx,13
+  1119 00000CAE F366AB                  	rep	stosd
+  1120 00000CB1 89C1                    	mov 	cx,ax
+  1121                                  	right_edge
+    58 00000CB3 B002                <1>  mov al,00002h
+    59 00000CB5 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000CB9 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000CBA 88E8                <1>  mov al,ch
+    63 00000CBC AA                  <1>  stosb
+  1122 00000CBD E92AF6                  	jmp 	Fill.fillcont
+  1123                                  
+  1124                                  Jump228:
+  1125 00000CC0 88E9                    	mov 	cl,ch
+  1126                                  	left_edge
+    46 00000CC2 B002                <1>  mov al,00002h
+    47 00000CC4 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000CC8 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000CC9 C1EF02              <1>  shr di,2
+    51 00000CCC 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000CCE 88E8                <1>  mov al,ch
+    54 00000CD0 AA                  <1>  stosb
+  1127                                  	middle
+    41 00000CD1 B802FF              <1>  mov ax,0ff02h
+    42 00000CD4 EF                  <1>  out dx,ax
+  1128 00000CD5 6689C8                  	mov 	eax,ecx
+  1129 00000CD8 B90E00                  	mov	cx,14
+  1130 00000CDB F366AB                  	rep	stosd
+  1131 00000CDE 89C1                    	mov 	cx,ax
+  1132                                  	right_edge
+    58 00000CE0 B002                <1>  mov al,00002h
+    59 00000CE2 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000CE6 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000CE7 88E8                <1>  mov al,ch
+    63 00000CE9 AA                  <1>  stosb
+  1133 00000CEA E9FDF5                  	jmp 	Fill.fillcont
+  1134                                  Jump232:
+  1135 00000CED 88E9                    	mov 	cl,ch
+  1136                                  	left_edge
+    46 00000CEF B002                <1>  mov al,00002h
+    47 00000CF1 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000CF5 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000CF6 C1EF02              <1>  shr di,2
+    51 00000CF9 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000CFB 88E8                <1>  mov al,ch
+    54 00000CFD AA                  <1>  stosb
+  1137                                  	middle
+    41 00000CFE B802FF              <1>  mov ax,0ff02h
+    42 00000D01 EF                  <1>  out dx,ax
+  1138 00000D02 6689C8                  	mov 	eax,ecx
+  1139 00000D05 AA                      	stosb
+  1140 00000D06 B90E00                  	mov	cx,14
+  1141 00000D09 F366AB                  	rep	stosd
+  1142 00000D0C 89C1                    	mov 	cx,ax
+  1143                                  	right_edge
+    58 00000D0E B002                <1>  mov al,00002h
+    59 00000D10 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000D14 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000D15 88E8                <1>  mov al,ch
+    63 00000D17 AA                  <1>  stosb
+  1144 00000D18 E9CFF5                  	jmp 	Fill.fillcont
+  1145                                  Jump236:
+  1146 00000D1B 88E9                    	mov 	cl,ch
+  1147                                  	left_edge
+    46 00000D1D B002                <1>  mov al,00002h
+    47 00000D1F 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000D23 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000D24 C1EF02              <1>  shr di,2
+    51 00000D27 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000D29 88E8                <1>  mov al,ch
+    54 00000D2B AA                  <1>  stosb
+  1148                                  	middle
+    41 00000D2C B802FF              <1>  mov ax,0ff02h
+    42 00000D2F EF                  <1>  out dx,ax
+  1149 00000D30 6689C8                  	mov 	eax,ecx
+  1150 00000D33 AB                      	stosw
+  1151 00000D34 B90E00                  	mov	cx,14
+  1152 00000D37 F366AB                  	rep	stosd
+  1153 00000D3A 89C1                    	mov 	cx,ax
+  1154                                  	right_edge
+    58 00000D3C B002                <1>  mov al,00002h
+    59 00000D3E 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000D42 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000D43 88E8                <1>  mov al,ch
+    63 00000D45 AA                  <1>  stosb
+  1155 00000D46 E9A1F5                  	jmp 	Fill.fillcont
+  1156                                  Jump240:
+  1157 00000D49 88E9                    	mov 	cl,ch
+  1158                                  	left_edge
+    46 00000D4B B002                <1>  mov al,00002h
+    47 00000D4D 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000D51 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000D52 C1EF02              <1>  shr di,2
+    51 00000D55 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000D57 88E8                <1>  mov al,ch
+    54 00000D59 AA                  <1>  stosb
+  1159                                  	middle
+    41 00000D5A B802FF              <1>  mov ax,0ff02h
+    42 00000D5D EF                  <1>  out dx,ax
+  1160 00000D5E 6689C8                  	mov 	eax,ecx
+  1161 00000D61 AA                      	stosb
+  1162 00000D62 AB                      	stosw
+  1163 00000D63 B90E00                  	mov	cx,14
+  1164 00000D66 F366AB                  	rep	stosd
+  1165 00000D69 89C1                    	mov 	cx,ax
+  1166                                  	right_edge
+    58 00000D6B B002                <1>  mov al,00002h
+    59 00000D6D 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000D71 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000D72 88E8                <1>  mov al,ch
+    63 00000D74 AA                  <1>  stosb
+  1167 00000D75 E972F5                  	jmp 	Fill.fillcont
+  1168                                  
+  1169                                  Jump244:
+  1170 00000D78 88E9                    	mov 	cl,ch
+  1171                                  	left_edge
+    46 00000D7A B002                <1>  mov al,00002h
+    47 00000D7C 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000D80 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000D81 C1EF02              <1>  shr di,2
+    51 00000D84 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000D86 88E8                <1>  mov al,ch
+    54 00000D88 AA                  <1>  stosb
+  1172                                  	middle
+    41 00000D89 B802FF              <1>  mov ax,0ff02h
+    42 00000D8C EF                  <1>  out dx,ax
+  1173 00000D8D 6689C8                  	mov 	eax,ecx
+  1174 00000D90 B90F00                  	mov	cx,15
+  1175 00000D93 F366AB                  	rep	stosd
+  1176 00000D96 89C1                    	mov 	cx,ax
+  1177                                  	right_edge
+    58 00000D98 B002                <1>  mov al,00002h
+    59 00000D9A 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000D9E EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000D9F 88E8                <1>  mov al,ch
+    63 00000DA1 AA                  <1>  stosb
+  1178 00000DA2 E945F5                  	jmp 	Fill.fillcont
+  1179                                  Jump248:
+  1180 00000DA5 88E9                    	mov 	cl,ch
+  1181                                  	left_edge
+    46 00000DA7 B002                <1>  mov al,00002h
+    47 00000DA9 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000DAD EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000DAE C1EF02              <1>  shr di,2
+    51 00000DB1 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000DB3 88E8                <1>  mov al,ch
+    54 00000DB5 AA                  <1>  stosb
+  1182                                  	middle
+    41 00000DB6 B802FF              <1>  mov ax,0ff02h
+    42 00000DB9 EF                  <1>  out dx,ax
+  1183 00000DBA 6689C8                  	mov 	eax,ecx
+  1184 00000DBD AA                      	stosb
+  1185 00000DBE B90F00                  	mov	cx,15
+  1186 00000DC1 F366AB                  	rep	stosd
+  1187 00000DC4 89C1                    	mov 	cx,ax
+  1188                                  	right_edge
+    58 00000DC6 B002                <1>  mov al,00002h
+    59 00000DC8 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000DCC EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000DCD 88E8                <1>  mov al,ch
+    63 00000DCF AA                  <1>  stosb
+  1189 00000DD0 E917F5                  	jmp 	Fill.fillcont
+  1190                                  Jump252:
+  1191 00000DD3 88E9                    	mov 	cl,ch
+  1192                                  	left_edge
+    46 00000DD5 B002                <1>  mov al,00002h
+    47 00000DD7 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000DDB EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000DDC C1EF02              <1>  shr di,2
+    51 00000DDF 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000DE1 88E8                <1>  mov al,ch
+    54 00000DE3 AA                  <1>  stosb
+  1193                                  	middle
+    41 00000DE4 B802FF              <1>  mov ax,0ff02h
+    42 00000DE7 EF                  <1>  out dx,ax
+  1194 00000DE8 6689C8                  	mov 	eax,ecx
+  1195 00000DEB AB                      	stosw
+  1196 00000DEC B90F00                  	mov	cx,15
+  1197 00000DEF F366AB                  	rep	stosd
+  1198 00000DF2 89C1                    	mov 	cx,ax
+  1199                                  	right_edge
+    58 00000DF4 B002                <1>  mov al,00002h
+    59 00000DF6 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000DFA EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000DFB 88E8                <1>  mov al,ch
+    63 00000DFD AA                  <1>  stosb
+  1200 00000DFE E9E9F4                  	jmp 	Fill.fillcont
+  1201                                  Jump256:
+  1202 00000E01 88E9                    	mov 	cl,ch
+  1203                                  	left_edge
+    46 00000E03 B002                <1>  mov al,00002h
+    47 00000E05 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000E09 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000E0A C1EF02              <1>  shr di,2
+    51 00000E0D 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000E0F 88E8                <1>  mov al,ch
+    54 00000E11 AA                  <1>  stosb
+  1204                                  	middle
+    41 00000E12 B802FF              <1>  mov ax,0ff02h
+    42 00000E15 EF                  <1>  out dx,ax
+  1205 00000E16 6689C8                  	mov 	eax,ecx
+  1206 00000E19 AA                      	stosb
+  1207 00000E1A AB                      	stosw
+  1208 00000E1B B90F00                  	mov	cx,15
+  1209 00000E1E F366AB                  	rep	stosd
+  1210 00000E21 89C1                    	mov 	cx,ax
+  1211                                  	right_edge
+    58 00000E23 B002                <1>  mov al,00002h
+    59 00000E25 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000E29 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000E2A 88E8                <1>  mov al,ch
+    63 00000E2C AA                  <1>  stosb
+  1212 00000E2D E9BAF4                  	jmp 	Fill.fillcont
+  1213                                  
+  1214                                  Jump260:
+  1215 00000E30 88E9                    	mov 	cl,ch
+  1216                                  	left_edge
+    46 00000E32 B002                <1>  mov al,00002h
+    47 00000E34 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000E38 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000E39 C1EF02              <1>  shr di,2
+    51 00000E3C 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000E3E 88E8                <1>  mov al,ch
+    54 00000E40 AA                  <1>  stosb
+  1217                                  	middle
+    41 00000E41 B802FF              <1>  mov ax,0ff02h
+    42 00000E44 EF                  <1>  out dx,ax
+  1218 00000E45 6689C8                  	mov 	eax,ecx
+  1219 00000E48 B91000                  	mov	cx,16
+  1220 00000E4B F366AB                  	rep	stosd
+  1221 00000E4E 89C1                    	mov 	cx,ax
+  1222                                  	right_edge
+    58 00000E50 B002                <1>  mov al,00002h
+    59 00000E52 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000E56 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000E57 88E8                <1>  mov al,ch
+    63 00000E59 AA                  <1>  stosb
+  1223 00000E5A E98DF4                  	jmp 	Fill.fillcont
+  1224                                  Jump264:
+  1225 00000E5D 88E9                    	mov 	cl,ch
+  1226                                  	left_edge
+    46 00000E5F B002                <1>  mov al,00002h
+    47 00000E61 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000E65 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000E66 C1EF02              <1>  shr di,2
+    51 00000E69 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000E6B 88E8                <1>  mov al,ch
+    54 00000E6D AA                  <1>  stosb
+  1227                                  	middle
+    41 00000E6E B802FF              <1>  mov ax,0ff02h
+    42 00000E71 EF                  <1>  out dx,ax
+  1228 00000E72 6689C8                  	mov 	eax,ecx
+  1229 00000E75 AA                      	stosb
+  1230 00000E76 B91000                  	mov	cx,16
+  1231 00000E79 F366AB                  	rep	stosd
+  1232 00000E7C 89C1                    	mov 	cx,ax
+  1233                                  	right_edge
+    58 00000E7E B002                <1>  mov al,00002h
+    59 00000E80 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000E84 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000E85 88E8                <1>  mov al,ch
+    63 00000E87 AA                  <1>  stosb
+  1234 00000E88 E95FF4                  	jmp 	Fill.fillcont
+  1235                                  Jump268:
+  1236 00000E8B 88E9                    	mov 	cl,ch
+  1237                                  	left_edge
+    46 00000E8D B002                <1>  mov al,00002h
+    47 00000E8F 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000E93 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000E94 C1EF02              <1>  shr di,2
+    51 00000E97 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000E99 88E8                <1>  mov al,ch
+    54 00000E9B AA                  <1>  stosb
+  1238                                  	middle
+    41 00000E9C B802FF              <1>  mov ax,0ff02h
+    42 00000E9F EF                  <1>  out dx,ax
+  1239 00000EA0 6689C8                  	mov 	eax,ecx
+  1240 00000EA3 AB                      	stosw
+  1241 00000EA4 B91000                  	mov	cx,16
+  1242 00000EA7 F366AB                  	rep	stosd
+  1243 00000EAA 89C1                    	mov 	cx,ax
+  1244                                  	right_edge
+    58 00000EAC B002                <1>  mov al,00002h
+    59 00000EAE 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000EB2 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000EB3 88E8                <1>  mov al,ch
+    63 00000EB5 AA                  <1>  stosb
+  1245 00000EB6 E931F4                  	jmp 	Fill.fillcont
+  1246                                  Jump272:
+  1247 00000EB9 88E9                    	mov 	cl,ch
+  1248                                  	left_edge
+    46 00000EBB B002                <1>  mov al,00002h
+    47 00000EBD 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000EC1 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000EC2 C1EF02              <1>  shr di,2
+    51 00000EC5 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000EC7 88E8                <1>  mov al,ch
+    54 00000EC9 AA                  <1>  stosb
+  1249                                  	middle
+    41 00000ECA B802FF              <1>  mov ax,0ff02h
+    42 00000ECD EF                  <1>  out dx,ax
+  1250 00000ECE 6689C8                  	mov 	eax,ecx
+  1251 00000ED1 AA                      	stosb
+  1252 00000ED2 AB                      	stosw
+  1253 00000ED3 B91000                  	mov	cx,16
+  1254 00000ED6 F366AB                  	rep	stosd
+  1255 00000ED9 89C1                    	mov 	cx,ax
+  1256                                  	right_edge
+    58 00000EDB B002                <1>  mov al,00002h
+    59 00000EDD 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000EE1 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000EE2 88E8                <1>  mov al,ch
+    63 00000EE4 AA                  <1>  stosb
+  1257 00000EE5 E902F4                  	jmp 	Fill.fillcont
+  1258                                  
+  1259                                  Jump276:
+  1260 00000EE8 88E9                    	mov 	cl,ch
+  1261                                  	left_edge
+    46 00000EEA B002                <1>  mov al,00002h
+    47 00000EEC 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000EF0 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000EF1 C1EF02              <1>  shr di,2
+    51 00000EF4 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000EF6 88E8                <1>  mov al,ch
+    54 00000EF8 AA                  <1>  stosb
+  1262                                  	middle
+    41 00000EF9 B802FF              <1>  mov ax,0ff02h
+    42 00000EFC EF                  <1>  out dx,ax
+  1263 00000EFD 6689C8                  	mov 	eax,ecx
+  1264 00000F00 B91100                  	mov	cx,17
+  1265 00000F03 F366AB                  	rep	stosd
+  1266 00000F06 89C1                    	mov 	cx,ax
+  1267                                  	right_edge
+    58 00000F08 B002                <1>  mov al,00002h
+    59 00000F0A 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000F0E EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000F0F 88E8                <1>  mov al,ch
+    63 00000F11 AA                  <1>  stosb
+  1268 00000F12 E9D5F3                  	jmp 	Fill.fillcont
+  1269                                  Jump280:
+  1270 00000F15 88E9                    	mov 	cl,ch
+  1271                                  	left_edge
+    46 00000F17 B002                <1>  mov al,00002h
+    47 00000F19 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000F1D EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000F1E C1EF02              <1>  shr di,2
+    51 00000F21 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000F23 88E8                <1>  mov al,ch
+    54 00000F25 AA                  <1>  stosb
+  1272                                  	middle
+    41 00000F26 B802FF              <1>  mov ax,0ff02h
+    42 00000F29 EF                  <1>  out dx,ax
+  1273 00000F2A 6689C8                  	mov 	eax,ecx
+  1274 00000F2D AA                      	stosb
+  1275 00000F2E B91100                  	mov	cx,17
+  1276 00000F31 F366AB                  	rep	stosd
+  1277 00000F34 89C1                    	mov 	cx,ax
+  1278                                  	right_edge
+    58 00000F36 B002                <1>  mov al,00002h
+    59 00000F38 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000F3C EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000F3D 88E8                <1>  mov al,ch
+    63 00000F3F AA                  <1>  stosb
+  1279 00000F40 E9A7F3                  	jmp 	Fill.fillcont
+  1280                                  Jump284:
+  1281 00000F43 88E9                    	mov 	cl,ch
+  1282                                  	left_edge
+    46 00000F45 B002                <1>  mov al,00002h
+    47 00000F47 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000F4B EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000F4C C1EF02              <1>  shr di,2
+    51 00000F4F 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000F51 88E8                <1>  mov al,ch
+    54 00000F53 AA                  <1>  stosb
+  1283                                  	middle
+    41 00000F54 B802FF              <1>  mov ax,0ff02h
+    42 00000F57 EF                  <1>  out dx,ax
+  1284 00000F58 6689C8                  	mov 	eax,ecx
+  1285 00000F5B AB                      	stosw
+  1286 00000F5C B91100                  	mov	cx,17
+  1287 00000F5F F366AB                  	rep	stosd
+  1288 00000F62 89C1                    	mov 	cx,ax
+  1289                                  	right_edge
+    58 00000F64 B002                <1>  mov al,00002h
+    59 00000F66 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000F6A EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000F6B 88E8                <1>  mov al,ch
+    63 00000F6D AA                  <1>  stosb
+  1290 00000F6E E979F3                  	jmp 	Fill.fillcont
+  1291                                  Jump288:
+  1292 00000F71 88E9                    	mov 	cl,ch
+  1293                                  	left_edge
+    46 00000F73 B002                <1>  mov al,00002h
+    47 00000F75 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000F79 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000F7A C1EF02              <1>  shr di,2
+    51 00000F7D 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000F7F 88E8                <1>  mov al,ch
+    54 00000F81 AA                  <1>  stosb
+  1294                                  	middle
+    41 00000F82 B802FF              <1>  mov ax,0ff02h
+    42 00000F85 EF                  <1>  out dx,ax
+  1295 00000F86 6689C8                  	mov 	eax,ecx
+  1296 00000F89 AA                      	stosb
+  1297 00000F8A AB                      	stosw
+  1298 00000F8B B91100                  	mov	cx,17
+  1299 00000F8E F366AB                  	rep	stosd
+  1300 00000F91 89C1                    	mov 	cx,ax
+  1301                                  	right_edge
+    58 00000F93 B002                <1>  mov al,00002h
+    59 00000F95 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000F99 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000F9A 88E8                <1>  mov al,ch
+    63 00000F9C AA                  <1>  stosb
+  1302 00000F9D E94AF3                  	jmp 	Fill.fillcont
+  1303                                  
+  1304                                  Jump292:
+  1305 00000FA0 88E9                    	mov 	cl,ch
+  1306                                  	left_edge
+    46 00000FA2 B002                <1>  mov al,00002h
+    47 00000FA4 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000FA8 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000FA9 C1EF02              <1>  shr di,2
+    51 00000FAC 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000FAE 88E8                <1>  mov al,ch
+    54 00000FB0 AA                  <1>  stosb
+  1307                                  	middle
+    41 00000FB1 B802FF              <1>  mov ax,0ff02h
+    42 00000FB4 EF                  <1>  out dx,ax
+  1308 00000FB5 6689C8                  	mov 	eax,ecx
+  1309 00000FB8 B91200                  	mov	cx,18
+  1310 00000FBB F366AB                  	rep	stosd
+  1311 00000FBE 89C1                    	mov 	cx,ax
+  1312                                  	right_edge
+    58 00000FC0 B002                <1>  mov al,00002h
+    59 00000FC2 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000FC6 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000FC7 88E8                <1>  mov al,ch
+    63 00000FC9 AA                  <1>  stosb
+  1313 00000FCA E91DF3                  	jmp 	Fill.fillcont
+  1314                                  Jump296:
+  1315 00000FCD 88E9                    	mov 	cl,ch
+  1316                                  	left_edge
+    46 00000FCF B002                <1>  mov al,00002h
+    47 00000FD1 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00000FD5 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00000FD6 C1EF02              <1>  shr di,2
+    51 00000FD9 01F7                <1>  add di,si
+    52                              <1> 
+    53 00000FDB 88E8                <1>  mov al,ch
+    54 00000FDD AA                  <1>  stosb
+  1317                                  	middle
+    41 00000FDE B802FF              <1>  mov ax,0ff02h
+    42 00000FE1 EF                  <1>  out dx,ax
+  1318 00000FE2 6689C8                  	mov 	eax,ecx
+  1319 00000FE5 AA                      	stosb
+  1320 00000FE6 B91200                  	mov	cx,18
+  1321 00000FE9 F366AB                  	rep	stosd
+  1322 00000FEC 89C1                    	mov 	cx,ax
+  1323                                  	right_edge
+    58 00000FEE B002                <1>  mov al,00002h
+    59 00000FF0 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00000FF4 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00000FF5 88E8                <1>  mov al,ch
+    63 00000FF7 AA                  <1>  stosb
+  1324 00000FF8 E9EFF2                  	jmp 	Fill.fillcont
+  1325                                  Jump300:
+  1326 00000FFB 88E9                    	mov 	cl,ch
+  1327                                  	left_edge
+    46 00000FFD B002                <1>  mov al,00002h
+    47 00000FFF 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00001003 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00001004 C1EF02              <1>  shr di,2
+    51 00001007 01F7                <1>  add di,si
+    52                              <1> 
+    53 00001009 88E8                <1>  mov al,ch
+    54 0000100B AA                  <1>  stosb
+  1328                                  	middle
+    41 0000100C B802FF              <1>  mov ax,0ff02h
+    42 0000100F EF                  <1>  out dx,ax
+  1329 00001010 6689C8                  	mov 	eax,ecx
+  1330 00001013 AB                      	stosw
+  1331 00001014 B91200                  	mov	cx,18
+  1332 00001017 F366AB                  	rep	stosd
+  1333 0000101A 89C1                    	mov 	cx,ax
+  1334                                  	right_edge
+    58 0000101C B002                <1>  mov al,00002h
+    59 0000101E 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00001022 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00001023 88E8                <1>  mov al,ch
+    63 00001025 AA                  <1>  stosb
+  1335 00001026 E9C1F2                  	jmp 	Fill.fillcont
+  1336                                  Jump304:
+  1337 00001029 88E9                    	mov 	cl,ch
+  1338                                  	left_edge
+    46 0000102B B002                <1>  mov al,00002h
+    47 0000102D 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00001031 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00001032 C1EF02              <1>  shr di,2
+    51 00001035 01F7                <1>  add di,si
+    52                              <1> 
+    53 00001037 88E8                <1>  mov al,ch
+    54 00001039 AA                  <1>  stosb
+  1339                                  	middle
+    41 0000103A B802FF              <1>  mov ax,0ff02h
+    42 0000103D EF                  <1>  out dx,ax
+  1340 0000103E 6689C8                  	mov 	eax,ecx
+  1341 00001041 AA                      	stosb
+  1342 00001042 AB                      	stosw
+  1343 00001043 B91200                  	mov	cx,18
+  1344 00001046 F366AB                  	rep	stosd
+  1345 00001049 89C1                    	mov 	cx,ax
+  1346                                  	right_edge
+    58 0000104B B002                <1>  mov al,00002h
+    59 0000104D 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00001051 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00001052 88E8                <1>  mov al,ch
+    63 00001054 AA                  <1>  stosb
+  1347 00001055 E992F2                  	jmp 	Fill.fillcont
+  1348                                  
+  1349                                  Jump308:
+  1350 00001058 88E9                    	mov 	cl,ch
+  1351                                  	left_edge
+    46 0000105A B002                <1>  mov al,00002h
+    47 0000105C 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00001060 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00001061 C1EF02              <1>  shr di,2
+    51 00001064 01F7                <1>  add di,si
+    52                              <1> 
+    53 00001066 88E8                <1>  mov al,ch
+    54 00001068 AA                  <1>  stosb
+  1352                                  	middle
+    41 00001069 B802FF              <1>  mov ax,0ff02h
+    42 0000106C EF                  <1>  out dx,ax
+  1353 0000106D 6689C8                  	mov 	eax,ecx
+  1354 00001070 B91300                  	mov	cx,19
+  1355 00001073 F366AB                  	rep	stosd
+  1356 00001076 89C1                    	mov 	cx,ax
+  1357                                  	right_edge
+    58 00001078 B002                <1>  mov al,00002h
+    59 0000107A 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000107E EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000107F 88E8                <1>  mov al,ch
+    63 00001081 AA                  <1>  stosb
+  1358 00001082 E965F2                  	jmp 	Fill.fillcont
+  1359                                  Jump312:
+  1360 00001085 88E9                    	mov 	cl,ch
+  1361                                  	left_edge
+    46 00001087 B002                <1>  mov al,00002h
+    47 00001089 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 0000108D EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000108E C1EF02              <1>  shr di,2
+    51 00001091 01F7                <1>  add di,si
+    52                              <1> 
+    53 00001093 88E8                <1>  mov al,ch
+    54 00001095 AA                  <1>  stosb
+  1362                                  	middle
+    41 00001096 B802FF              <1>  mov ax,0ff02h
+    42 00001099 EF                  <1>  out dx,ax
+  1363 0000109A 6689C8                  	mov 	eax,ecx
+  1364 0000109D AA                      	stosb
+  1365 0000109E B91300                  	mov	cx,19
+  1366 000010A1 F366AB                  	rep	stosd
+  1367 000010A4 89C1                    	mov 	cx,ax
+  1368                                  	right_edge
+    58 000010A6 B002                <1>  mov al,00002h
+    59 000010A8 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000010AC EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000010AD 88E8                <1>  mov al,ch
+    63 000010AF AA                  <1>  stosb
+  1369 000010B0 E937F2                  	jmp 	Fill.fillcont
+  1370                                  Jump316:
+  1371 000010B3 88E9                    	mov 	cl,ch
+  1372                                  	left_edge
+    46 000010B5 B002                <1>  mov al,00002h
+    47 000010B7 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000010BB EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000010BC C1EF02              <1>  shr di,2
+    51 000010BF 01F7                <1>  add di,si
+    52                              <1> 
+    53 000010C1 88E8                <1>  mov al,ch
+    54 000010C3 AA                  <1>  stosb
+  1373                                  	middle
+    41 000010C4 B802FF              <1>  mov ax,0ff02h
+    42 000010C7 EF                  <1>  out dx,ax
+  1374 000010C8 6689C8                  	mov 	eax,ecx
+  1375 000010CB AB                      	stosw
+  1376 000010CC B91300                  	mov	cx,19
+  1377 000010CF F366AB                  	rep	stosd
+  1378 000010D2 89C1                    	mov 	cx,ax
+  1379                                  	right_edge
+    58 000010D4 B002                <1>  mov al,00002h
+    59 000010D6 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000010DA EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000010DB 88E8                <1>  mov al,ch
+    63 000010DD AA                  <1>  stosb
+  1380 000010DE E909F2                  	jmp 	Fill.fillcont
+  1381                                  Jump320:
+  1382 000010E1 88E9                    	mov 	cl,ch
+  1383                                  	left_edge
+    46 000010E3 B002                <1>  mov al,00002h
+    47 000010E5 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000010E9 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000010EA C1EF02              <1>  shr di,2
+    51 000010ED 01F7                <1>  add di,si
+    52                              <1> 
+    53 000010EF 88E8                <1>  mov al,ch
+    54 000010F1 AA                  <1>  stosb
+  1384                                  	middle
+    41 000010F2 B802FF              <1>  mov ax,0ff02h
+    42 000010F5 EF                  <1>  out dx,ax
+  1385 000010F6 6689C8                  	mov 	eax,ecx
+  1386 000010F9 AA                      	stosb
+  1387 000010FA AB                      	stosw
+  1388 000010FB B91300                  	mov	cx,19
+  1389 000010FE F366AB                  	rep	stosd
+  1390 00001101 89C1                    	mov 	cx,ax
+  1391                                  	right_edge
+    58 00001103 B002                <1>  mov al,00002h
+    59 00001105 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00001109 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000110A 88E8                <1>  mov al,ch
+    63 0000110C AA                  <1>  stosb
+  1392 0000110D E9DAF1                  	jmp 	Fill.fillcont
+  1393                                  
+  1394                                  Jump324:
+  1395 00001110 88E9                    	mov 	cl,ch
+  1396                                  	left_edge
+    46 00001112 B002                <1>  mov al,00002h
+    47 00001114 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00001118 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00001119 C1EF02              <1>  shr di,2
+    51 0000111C 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000111E 88E8                <1>  mov al,ch
+    54 00001120 AA                  <1>  stosb
+  1397                                  	middle
+    41 00001121 B802FF              <1>  mov ax,0ff02h
+    42 00001124 EF                  <1>  out dx,ax
+  1398 00001125 6689C8                  	mov 	eax,ecx
+  1399 00001128 B91400                  	mov	cx,20
+  1400 0000112B F366AB                  	rep	stosd
+  1401 0000112E 89C1                    	mov 	cx,ax
+  1402                                  	right_edge
+    58 00001130 B002                <1>  mov al,00002h
+    59 00001132 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00001136 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00001137 88E8                <1>  mov al,ch
+    63 00001139 AA                  <1>  stosb
+  1403 0000113A E9ADF1                  	jmp 	Fill.fillcont
+  1404                                  Jump328:
+  1405 0000113D 88E9                    	mov 	cl,ch
+  1406                                  	left_edge
+    46 0000113F B002                <1>  mov al,00002h
+    47 00001141 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00001145 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00001146 C1EF02              <1>  shr di,2
+    51 00001149 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000114B 88E8                <1>  mov al,ch
+    54 0000114D AA                  <1>  stosb
+  1407                                  	middle
+    41 0000114E B802FF              <1>  mov ax,0ff02h
+    42 00001151 EF                  <1>  out dx,ax
+  1408 00001152 6689C8                  	mov 	eax,ecx
+  1409 00001155 AA                      	stosb
+  1410 00001156 B91400                  	mov	cx,20
+  1411 00001159 F366AB                  	rep	stosd
+  1412 0000115C 89C1                    	mov 	cx,ax
+  1413                                  	right_edge
+    58 0000115E B002                <1>  mov al,00002h
+    59 00001160 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00001164 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00001165 88E8                <1>  mov al,ch
+    63 00001167 AA                  <1>  stosb
+  1414 00001168 E97FF1                  	jmp 	Fill.fillcont
+  1415                                  Jump332:
+  1416 0000116B 88E9                    	mov 	cl,ch
+  1417                                  	left_edge
+    46 0000116D B002                <1>  mov al,00002h
+    47 0000116F 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00001173 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00001174 C1EF02              <1>  shr di,2
+    51 00001177 01F7                <1>  add di,si
+    52                              <1> 
+    53 00001179 88E8                <1>  mov al,ch
+    54 0000117B AA                  <1>  stosb
+  1418                                  	middle
+    41 0000117C B802FF              <1>  mov ax,0ff02h
+    42 0000117F EF                  <1>  out dx,ax
+  1419 00001180 6689C8                  	mov 	eax,ecx
+  1420 00001183 AB                      	stosw
+  1421 00001184 B91400                  	mov	cx,20
+  1422 00001187 F366AB                  	rep	stosd
+  1423 0000118A 89C1                    	mov 	cx,ax
+  1424                                  	right_edge
+    58 0000118C B002                <1>  mov al,00002h
+    59 0000118E 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00001192 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00001193 88E8                <1>  mov al,ch
+    63 00001195 AA                  <1>  stosb
+  1425 00001196 E951F1                  	jmp 	Fill.fillcont
+  1426                                  Jump336:
+  1427 00001199 88E9                    	mov 	cl,ch
+  1428                                  	left_edge
+    46 0000119B B002                <1>  mov al,00002h
+    47 0000119D 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000011A1 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000011A2 C1EF02              <1>  shr di,2
+    51 000011A5 01F7                <1>  add di,si
+    52                              <1> 
+    53 000011A7 88E8                <1>  mov al,ch
+    54 000011A9 AA                  <1>  stosb
+  1429                                  	middle
+    41 000011AA B802FF              <1>  mov ax,0ff02h
+    42 000011AD EF                  <1>  out dx,ax
+  1430 000011AE 6689C8                  	mov 	eax,ecx
+  1431 000011B1 AA                      	stosb
+  1432 000011B2 AB                      	stosw
+  1433 000011B3 B91400                  	mov	cx,20
+  1434 000011B6 F366AB                  	rep	stosd
+  1435 000011B9 89C1                    	mov 	cx,ax
+  1436                                  	right_edge
+    58 000011BB B002                <1>  mov al,00002h
+    59 000011BD 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000011C1 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000011C2 88E8                <1>  mov al,ch
+    63 000011C4 AA                  <1>  stosb
+  1437 000011C5 E922F1                  	jmp 	Fill.fillcont
+  1438                                  
+  1439                                  Jump340:
+  1440 000011C8 88E9                    	mov 	cl,ch
+  1441                                  	left_edge
+    46 000011CA B002                <1>  mov al,00002h
+    47 000011CC 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000011D0 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000011D1 C1EF02              <1>  shr di,2
+    51 000011D4 01F7                <1>  add di,si
+    52                              <1> 
+    53 000011D6 88E8                <1>  mov al,ch
+    54 000011D8 AA                  <1>  stosb
+  1442                                  	middle
+    41 000011D9 B802FF              <1>  mov ax,0ff02h
+    42 000011DC EF                  <1>  out dx,ax
+  1443 000011DD 6689C8                  	mov 	eax,ecx
+  1444 000011E0 B91500                  	mov	cx,21
+  1445 000011E3 F366AB                  	rep	stosd
+  1446 000011E6 89C1                    	mov 	cx,ax
+  1447                                  	right_edge
+    58 000011E8 B002                <1>  mov al,00002h
+    59 000011EA 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000011EE EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000011EF 88E8                <1>  mov al,ch
+    63 000011F1 AA                  <1>  stosb
+  1448 000011F2 E9F5F0                  	jmp 	Fill.fillcont
+  1449                                  Jump344:
+  1450 000011F5 88E9                    	mov 	cl,ch
+  1451                                  	left_edge
+    46 000011F7 B002                <1>  mov al,00002h
+    47 000011F9 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000011FD EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000011FE C1EF02              <1>  shr di,2
+    51 00001201 01F7                <1>  add di,si
+    52                              <1> 
+    53 00001203 88E8                <1>  mov al,ch
+    54 00001205 AA                  <1>  stosb
+  1452                                  	middle
+    41 00001206 B802FF              <1>  mov ax,0ff02h
+    42 00001209 EF                  <1>  out dx,ax
+  1453 0000120A 6689C8                  	mov 	eax,ecx
+  1454 0000120D AA                      	stosb
+  1455 0000120E B91500                  	mov	cx,21
+  1456 00001211 F366AB                  	rep	stosd
+  1457 00001214 89C1                    	mov 	cx,ax
+  1458                                  	right_edge
+    58 00001216 B002                <1>  mov al,00002h
+    59 00001218 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000121C EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000121D 88E8                <1>  mov al,ch
+    63 0000121F AA                  <1>  stosb
+  1459 00001220 E9C7F0                  	jmp 	Fill.fillcont
+  1460                                  Jump348:
+  1461 00001223 88E9                    	mov 	cl,ch
+  1462                                  	left_edge
+    46 00001225 B002                <1>  mov al,00002h
+    47 00001227 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 0000122B EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000122C C1EF02              <1>  shr di,2
+    51 0000122F 01F7                <1>  add di,si
+    52                              <1> 
+    53 00001231 88E8                <1>  mov al,ch
+    54 00001233 AA                  <1>  stosb
+  1463                                  	middle
+    41 00001234 B802FF              <1>  mov ax,0ff02h
+    42 00001237 EF                  <1>  out dx,ax
+  1464 00001238 6689C8                  	mov 	eax,ecx
+  1465 0000123B AB                      	stosw
+  1466 0000123C B91500                  	mov	cx,21
+  1467 0000123F F366AB                  	rep	stosd
+  1468 00001242 89C1                    	mov 	cx,ax
+  1469                                  	right_edge
+    58 00001244 B002                <1>  mov al,00002h
+    59 00001246 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 0000124A EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000124B 88E8                <1>  mov al,ch
+    63 0000124D AA                  <1>  stosb
+  1470 0000124E E999F0                  	jmp 	Fill.fillcont
+  1471                                  Jump352:
+  1472 00001251 88E9                    	mov 	cl,ch
+  1473                                  	left_edge
+    46 00001253 B002                <1>  mov al,00002h
+    47 00001255 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00001259 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 0000125A C1EF02              <1>  shr di,2
+    51 0000125D 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000125F 88E8                <1>  mov al,ch
+    54 00001261 AA                  <1>  stosb
+  1474                                  	middle
+    41 00001262 B802FF              <1>  mov ax,0ff02h
+    42 00001265 EF                  <1>  out dx,ax
+  1475 00001266 6689C8                  	mov 	eax,ecx
+  1476 00001269 AA                      	stosb
+  1477 0000126A AB                      	stosw
+  1478 0000126B B91500                  	mov	cx,21
+  1479 0000126E F366AB                  	rep	stosd
+  1480 00001271 89C1                    	mov 	cx,ax
+  1481                                  	right_edge
+    58 00001273 B002                <1>  mov al,00002h
+    59 00001275 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00001279 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 0000127A 88E8                <1>  mov al,ch
+    63 0000127C AA                  <1>  stosb
+  1482 0000127D E96AF0                  	jmp 	Fill.fillcont
+  1483                                  
+  1484                                  Jump356:
+  1485 00001280 88E9                    	mov 	cl,ch
+  1486                                  	left_edge
+    46 00001282 B002                <1>  mov al,00002h
+    47 00001284 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00001288 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00001289 C1EF02              <1>  shr di,2
+    51 0000128C 01F7                <1>  add di,si
+    52                              <1> 
+    53 0000128E 88E8                <1>  mov al,ch
+    54 00001290 AA                  <1>  stosb
+  1487                                  	middle
+    41 00001291 B802FF              <1>  mov ax,0ff02h
+    42 00001294 EF                  <1>  out dx,ax
+  1488 00001295 6689C8                  	mov 	eax,ecx
+  1489 00001298 B91600                  	mov	cx,22
+  1490 0000129B F366AB                  	rep	stosd
+  1491 0000129E 89C1                    	mov 	cx,ax
+  1492                                  	right_edge
+    58 000012A0 B002                <1>  mov al,00002h
+    59 000012A2 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000012A6 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000012A7 88E8                <1>  mov al,ch
+    63 000012A9 AA                  <1>  stosb
+  1493 000012AA E93DF0                  	jmp 	Fill.fillcont
+  1494                                  Jump360:
+  1495 000012AD 88E9                    	mov 	cl,ch
+  1496                                  	left_edge
+    46 000012AF B002                <1>  mov al,00002h
+    47 000012B1 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000012B5 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000012B6 C1EF02              <1>  shr di,2
+    51 000012B9 01F7                <1>  add di,si
+    52                              <1> 
+    53 000012BB 88E8                <1>  mov al,ch
+    54 000012BD AA                  <1>  stosb
+  1497                                  	middle
+    41 000012BE B802FF              <1>  mov ax,0ff02h
+    42 000012C1 EF                  <1>  out dx,ax
+  1498 000012C2 6689C8                  	mov 	eax,ecx
+  1499 000012C5 AA                      	stosb
+  1500 000012C6 B91600                  	mov	cx,22
+  1501 000012C9 F366AB                  	rep	stosd
+  1502 000012CC 89C1                    	mov 	cx,ax
+  1503                                  	right_edge
+    58 000012CE B002                <1>  mov al,00002h
+    59 000012D0 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 000012D4 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 000012D5 88E8                <1>  mov al,ch
+    63 000012D7 AA                  <1>  stosb
+  1504 000012D8 E90FF0                  	jmp 	Fill.fillcont
+  1505                                  Jump364:
+  1506 000012DB 88E9                    	mov 	cl,ch
+  1507                                  	left_edge
+    46 000012DD B002                <1>  mov al,00002h
+    47 000012DF 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 000012E3 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 000012E4 C1EF02              <1>  shr di,2
+    51 000012E7 01F7                <1>  add di,si
+    52                              <1> 
+    53 000012E9 88E8                <1>  mov al,ch
+    54 000012EB AA                  <1>  stosb
+  1508                                  	middle
+    41 000012EC B802FF              <1>  mov ax,0ff02h
+    42 000012EF EF                  <1>  out dx,ax
+  1509 000012F0 6689C8                  	mov 	eax,ecx
+  1510 000012F3 AB                      	stosw
+  1511 000012F4 B91600                  	mov	cx,22
+  1512 000012F7 F366AB                  	rep	stosd
+  1513 000012FA 89C1                    	mov 	cx,ax
+  1514                                  	right_edge
+    58 000012FC B002                <1>  mov al,00002h
+    59 000012FE 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00001302 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00001303 88E8                <1>  mov al,ch
+    63 00001305 AA                  <1>  stosb
+  1515 00001306 E9E1EF                  	jmp 	Fill.fillcont
+  1516                                  Jump368:
+  1517 00001309 88E9                    	mov 	cl,ch
+  1518                                  	left_edge
+    46 0000130B B002                <1>  mov al,00002h
+    47 0000130D 8AA5[3C04]          <1>  mov ah,[edgeleft+di]
+    48 00001311 EF                  <1>  out dx,ax
+    49                              <1> 
+    50 00001312 C1EF02              <1>  shr di,2
+    51 00001315 01F7                <1>  add di,si
+    52                              <1> 
+    53 00001317 88E8                <1>  mov al,ch
+    54 00001319 AA                  <1>  stosb
+  1519                                  	middle
+    41 0000131A B802FF              <1>  mov ax,0ff02h
+    42 0000131D EF                  <1>  out dx,ax
+  1520 0000131E 6689C8                  	mov 	eax,ecx
+  1521 00001321 AA                      	stosb
+  1522 00001322 AB                      	stosw
+  1523 00001323 B91600                  	mov	cx,22
+  1524 00001326 F366AB                  	rep	stosd
+  1525 00001329 89C1                    	mov 	cx,ax
+  1526                                  	right_edge
+    58 0000132B B002                <1>  mov al,00002h
+    59 0000132D 8AA6[A405]          <1>  mov ah,[edgeright+bp]
+    60 00001331 EF                  <1>  out dx,ax
+    61                              <1> 
+    62 00001332 88E8                <1>  mov al,ch
+    63 00001334 AA                  <1>  stosb
+  1527 00001335 E9B2EF                  	jmp 	Fill.fillcont
+  1528                                  
+  1529                                  ; 0123 = 
+  1530                                  
+  1531                                  ; 0000000000111111111122222222223333333333444444444455555555556666666666777777777788888888889999999999
+  1532                                  ; 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+  1533                                  
+  1534                                  
+  1535                                  
+  1536 00001338 89FE                    HexChar:	mov		si,di
+  1537 0000133A 88C3                    			mov		bl,al
+  1538 0000133C D0EB                    			shr		bl,1
+  1539 0000133E D0EB                    			shr		bl,1
+  1540 00001340 D0EB                    			shr		bl,1
+  1541 00001342 D0EB                    			shr		bl,1
+  1542 00001344 83E30F                  			and		bx,15
+  1543 00001347 01DB                    			add		bx,bx
+  1544 00001349 01DB                    			add		bx,bx
+  1545 0000134B 50                       push ax
+  1546 0000134C 668B87[9802]            			mov		eax,[Hex0+bx]
+  1547 00001351 26668905                			mov		[es:di],eax
+  1548 00001355 83C75A                  			add		di,SCREEN_WIDTH_360
+  1549 00001358 668B87[D802]            			mov		eax,[Hex1+bx]
+  1550 0000135D 26668905                			mov		[es:di],eax
+  1551 00001361 83C75A                  			add		di,SCREEN_WIDTH_360
+  1552 00001364 668B87[1803]            			mov		eax,[Hex2+bx]
+  1553 00001369 26668905                			mov		[es:di],eax
+  1554 0000136D 83C75A                  			add		di,SCREEN_WIDTH_360
+  1555 00001370 668B87[5803]            			mov		eax,[Hex3+bx]
+  1556 00001375 26668905                			mov		[es:di],eax
+  1557 00001379 83C75A                  			add		di,SCREEN_WIDTH_360
+  1558 0000137C 668B87[9803]            			mov		eax,[Hex4+bx]
+  1559 00001381 26668905                			mov		[es:di],eax
+  1560 00001385 58                       pop ax
+  1561 00001386 89F7                    			mov		di,si
+  1562 00001388 83C704                  			add		di,4
+  1563                                  
+  1564 0000138B 88C3                    			mov		bl,al
+  1565 0000138D 80E30F                  			and		bl,15
+  1566 00001390 01DB                    			add		bx,bx
+  1567 00001392 01DB                    			add		bx,bx
+  1568 00001394 668B87[9802]            			mov		eax,[Hex0+bx]
+  1569 00001399 26668905                			mov		[es:di],eax
+  1570 0000139D 83C75A                  			add		di,SCREEN_WIDTH_360
+  1571 000013A0 668B87[D802]            			mov		eax,[Hex1+bx]
+  1572 000013A5 26668905                			mov		[es:di],eax
+  1573 000013A9 83C75A                  			add		di,SCREEN_WIDTH_360
+  1574 000013AC 668B87[1803]            			mov		eax,[Hex2+bx]
+  1575 000013B1 26668905                			mov		[es:di],eax
+  1576 000013B5 83C75A                  			add		di,SCREEN_WIDTH_360
+  1577 000013B8 668B87[5803]            			mov		eax,[Hex3+bx]
+  1578 000013BD 26668905                			mov		[es:di],eax
+  1579 000013C1 83C75A                  			add		di,SCREEN_WIDTH_360
+  1580 000013C4 668B87[9803]            			mov		eax,[Hex4+bx]
+  1581 000013C9 26668905                			mov		[es:di],eax
+  1582 000013CD C3                      			ret
+  1583                                  
+  1584 000013CE 50                      Hex24:		push	ax
+  1585 000013CF 53                      			push	bx
+  1586                                  
+  1587 000013D0 88F8                    			mov		al,bh
+  1588 000013D2 E82100                  			call	Hex8
+  1589                                  						
+  1590 000013D5 5B                      			pop		bx
+  1591 000013D6 58                      			pop		ax
+  1592                                  
+  1593 000013D7 50                      			push	ax
+  1594 000013D8 53                      			push	bx
+  1595                                  
+  1596 000013D9 BF0800                  			mov		di,8
+  1597 000013DC E81900                  			call	HexByte
+  1598                                  
+  1599 000013DF 5B                      			pop		bx
+  1600 000013E0 58                      			pop		ax
+  1601                                  
+  1602 000013E1 88E0                    			mov		al,ah
+  1603 000013E3 BF0800                  			mov		di,8
+  1604 000013E6 EB10                    			jmp		HexByte	; does ret
+  1605                                  
+  1606 000013E8 50                      Hex16:		push	ax
+  1607 000013E9 53                      			push	bx
+  1608                                  
+  1609 000013EA 88E0                    			mov		al,ah
+  1610 000013EC E80700                  			call	Hex8
+  1611                                  						
+  1612 000013EF 5B                      			pop		bx
+  1613 000013F0 58                      			pop		ax
+  1614                                  
+  1615 000013F1 BF0800                  			mov		di,8
+  1616 000013F4 EB02                    			jmp		HexByte ; does ret
+  1617                                  
+  1618 000013F6 31FF                    Hex8:		xor		di,di
+  1619 000013F8 30FF                    HexByte:	xor		bh,bh
+  1620 000013FA 88DC                    			mov		ah,bl
+  1621 000013FC 00E4                    			add		ah,ah	; *2
+  1622 000013FE 00E3                    			add		bl,ah	; *3
+  1623 00001400 01DB                    			add		bx,bx	; *6
+  1624 00001402 01DB                    			add		bx,bx	; *12
+  1625 00001404 03BF[0000]              			add		di,[BackBufferTable360+bx]	; lookup start ver
+  1626                                  ;				add		di, [ScreenBuffer]
+  1627                                  
+  1628 00001408 E92DFF                  			jmp		HexChar	 ; does ret
+  1629                                  ;			ret
+  1630                                  
+  1631                                  
+  1632                                  section .data 
+  1633                                  align	2 ; 16 ; 8 ; 16
+  1634                                  	
+  1635                                  BackBufferTable360:
+  1636 00000000 00005A00B4000E0168-     		dw SCREEN_WIDTH_360*000,SCREEN_WIDTH_360*001,SCREEN_WIDTH_360*002,SCREEN_WIDTH_360*003,SCREEN_WIDTH_360*004,SCREEN_WIDTH_360*005,SCREEN_WIDTH_360*006,SCREEN_WIDTH_360*007,SCREEN_WIDTH_360*008,SCREEN_WIDTH_360*009
+  1636 00000009 01C2011C027602D002-
+  1636 00000012 2A03               
+  1637 00000014 8403DE0338049204EC-     		dw SCREEN_WIDTH_360*010,SCREEN_WIDTH_360*011,SCREEN_WIDTH_360*012,SCREEN_WIDTH_360*013,SCREEN_WIDTH_360*014,SCREEN_WIDTH_360*015,SCREEN_WIDTH_360*016,SCREEN_WIDTH_360*017,SCREEN_WIDTH_360*018,SCREEN_WIDTH_360*019
+  1637 0000001D 044605A005FA055406-
+  1637 00000026 AE06               
+  1638 00000028 08076207BC07160870-     		dw SCREEN_WIDTH_360*020,SCREEN_WIDTH_360*021,SCREEN_WIDTH_360*022,SCREEN_WIDTH_360*023,SCREEN_WIDTH_360*024,SCREEN_WIDTH_360*025,SCREEN_WIDTH_360*026,SCREEN_WIDTH_360*027,SCREEN_WIDTH_360*028,SCREEN_WIDTH_360*029
+  1638 00000031 08CA0824097E09D809-
+  1638 0000003A 320A               
+  1639 0000003C 8C0AE60A400B9A0BF4-     		dw SCREEN_WIDTH_360*030,SCREEN_WIDTH_360*031,SCREEN_WIDTH_360*032,SCREEN_WIDTH_360*033,SCREEN_WIDTH_360*034,SCREEN_WIDTH_360*035,SCREEN_WIDTH_360*036,SCREEN_WIDTH_360*037,SCREEN_WIDTH_360*038,SCREEN_WIDTH_360*039
+  1639 00000045 0B4E0CA80C020D5C0D-
+  1639 0000004E B60D               
+  1640 00000050 100E6A0EC40E1E0F78-     		dw SCREEN_WIDTH_360*040,SCREEN_WIDTH_360*041,SCREEN_WIDTH_360*042,SCREEN_WIDTH_360*043,SCREEN_WIDTH_360*044,SCREEN_WIDTH_360*045,SCREEN_WIDTH_360*046,SCREEN_WIDTH_360*047,SCREEN_WIDTH_360*048,SCREEN_WIDTH_360*049
+  1640 00000059 0FD20F2C108610E010-
+  1640 00000062 3A11               
+  1641 00000064 9411EE114812A212FC-     		dw SCREEN_WIDTH_360*050,SCREEN_WIDTH_360*051,SCREEN_WIDTH_360*052,SCREEN_WIDTH_360*053,SCREEN_WIDTH_360*054,SCREEN_WIDTH_360*055,SCREEN_WIDTH_360*056,SCREEN_WIDTH_360*057,SCREEN_WIDTH_360*058,SCREEN_WIDTH_360*059
+  1641 0000006D 125613B0130A146414-
+  1641 00000076 BE14               
+  1642 00000078 18157215CC15261680-     		dw SCREEN_WIDTH_360*060,SCREEN_WIDTH_360*061,SCREEN_WIDTH_360*062,SCREEN_WIDTH_360*063,SCREEN_WIDTH_360*064,SCREEN_WIDTH_360*065,SCREEN_WIDTH_360*066,SCREEN_WIDTH_360*067,SCREEN_WIDTH_360*068,SCREEN_WIDTH_360*069
+  1642 00000081 16DA1634178E17E817-
+  1642 0000008A 4218               
+  1643 0000008C 9C18F6185019AA1904-     		dw SCREEN_WIDTH_360*070,SCREEN_WIDTH_360*071,SCREEN_WIDTH_360*072,SCREEN_WIDTH_360*073,SCREEN_WIDTH_360*074,SCREEN_WIDTH_360*075,SCREEN_WIDTH_360*076,SCREEN_WIDTH_360*077,SCREEN_WIDTH_360*078,SCREEN_WIDTH_360*079
+  1643 00000095 1A5E1AB81A121B6C1B-
+  1643 0000009E C61B               
+  1644 000000A0 201C7A1CD41C2E1D88-     		dw SCREEN_WIDTH_360*080,SCREEN_WIDTH_360*081,SCREEN_WIDTH_360*082,SCREEN_WIDTH_360*083,SCREEN_WIDTH_360*084,SCREEN_WIDTH_360*085,SCREEN_WIDTH_360*086,SCREEN_WIDTH_360*087,SCREEN_WIDTH_360*088,SCREEN_WIDTH_360*089
+  1644 000000A9 1DE21D3C1E961EF01E-
+  1644 000000B2 4A1F               
+  1645 000000B4 A41FFE1F5820B2200C-     		dw SCREEN_WIDTH_360*090,SCREEN_WIDTH_360*091,SCREEN_WIDTH_360*092,SCREEN_WIDTH_360*093,SCREEN_WIDTH_360*094,SCREEN_WIDTH_360*095,SCREEN_WIDTH_360*096,SCREEN_WIDTH_360*097,SCREEN_WIDTH_360*098,SCREEN_WIDTH_360*099
+  1645 000000BD 216621C0211A227422-
+  1645 000000C6 CE22               
+  1646                                  
+  1647 000000C8 28238223DC23362490-     		dw SCREEN_WIDTH_360*100,SCREEN_WIDTH_360*101,SCREEN_WIDTH_360*102,SCREEN_WIDTH_360*103,SCREEN_WIDTH_360*104,SCREEN_WIDTH_360*105,SCREEN_WIDTH_360*106,SCREEN_WIDTH_360*107,SCREEN_WIDTH_360*108,SCREEN_WIDTH_360*109
+  1647 000000D1 24EA2444259E25F825-
+  1647 000000DA 5226               
+  1648 000000DC AC2606276027BA2714-     		dw SCREEN_WIDTH_360*110,SCREEN_WIDTH_360*111,SCREEN_WIDTH_360*112,SCREEN_WIDTH_360*113,SCREEN_WIDTH_360*114,SCREEN_WIDTH_360*115,SCREEN_WIDTH_360*116,SCREEN_WIDTH_360*117,SCREEN_WIDTH_360*118,SCREEN_WIDTH_360*119
+  1648 000000E5 286E28C82822297C29-
+  1648 000000EE D629               
+  1649 000000F0 302A8A2AE42A3E2B98-     		dw SCREEN_WIDTH_360*120,SCREEN_WIDTH_360*121,SCREEN_WIDTH_360*122,SCREEN_WIDTH_360*123,SCREEN_WIDTH_360*124,SCREEN_WIDTH_360*125,SCREEN_WIDTH_360*126,SCREEN_WIDTH_360*127,SCREEN_WIDTH_360*128,SCREEN_WIDTH_360*129
+  1649 000000F9 2BF22B4C2CA62C002D-
+  1649 00000102 5A2D               
+  1650 00000104 B42D0E2E682EC22E1C-     		dw SCREEN_WIDTH_360*130,SCREEN_WIDTH_360*131,SCREEN_WIDTH_360*132,SCREEN_WIDTH_360*133,SCREEN_WIDTH_360*134,SCREEN_WIDTH_360*135,SCREEN_WIDTH_360*136,SCREEN_WIDTH_360*137,SCREEN_WIDTH_360*138,SCREEN_WIDTH_360*139
+  1650 0000010D 2F762FD02F2A308430-
+  1650 00000116 DE30               
+  1651 00000118 38319231EC314632A0-     		dw SCREEN_WIDTH_360*140,SCREEN_WIDTH_360*141,SCREEN_WIDTH_360*142,SCREEN_WIDTH_360*143,SCREEN_WIDTH_360*144,SCREEN_WIDTH_360*145,SCREEN_WIDTH_360*146,SCREEN_WIDTH_360*147,SCREEN_WIDTH_360*148,SCREEN_WIDTH_360*149
+  1651 00000121 32FA325433AE330834-
+  1651 0000012A 6234               
+  1652 0000012C BC3416357035CA3524-     		dw SCREEN_WIDTH_360*150,SCREEN_WIDTH_360*151,SCREEN_WIDTH_360*152,SCREEN_WIDTH_360*153,SCREEN_WIDTH_360*154,SCREEN_WIDTH_360*155,SCREEN_WIDTH_360*156,SCREEN_WIDTH_360*157,SCREEN_WIDTH_360*158,SCREEN_WIDTH_360*159
+  1652 00000135 367E36D83632378C37-
+  1652 0000013E E637               
+  1653 00000140 40389A38F4384E39A8-     		dw SCREEN_WIDTH_360*160,SCREEN_WIDTH_360*161,SCREEN_WIDTH_360*162,SCREEN_WIDTH_360*163,SCREEN_WIDTH_360*164,SCREEN_WIDTH_360*165,SCREEN_WIDTH_360*166,SCREEN_WIDTH_360*167,SCREEN_WIDTH_360*168,SCREEN_WIDTH_360*169
+  1653 00000149 39023A5C3AB63A103B-
+  1653 00000152 6A3B               
+  1654 00000154 C43B1E3C783CD23C2C-     		dw SCREEN_WIDTH_360*170,SCREEN_WIDTH_360*171,SCREEN_WIDTH_360*172,SCREEN_WIDTH_360*173,SCREEN_WIDTH_360*174,SCREEN_WIDTH_360*175,SCREEN_WIDTH_360*176,SCREEN_WIDTH_360*177,SCREEN_WIDTH_360*178,SCREEN_WIDTH_360*179
+  1654 0000015D 3D863DE03D3A3E943E-
+  1654 00000166 EE3E               
+  1655 00000168 483FA23FFC3F5640B0-     		dw SCREEN_WIDTH_360*180,SCREEN_WIDTH_360*181,SCREEN_WIDTH_360*182,SCREEN_WIDTH_360*183,SCREEN_WIDTH_360*184,SCREEN_WIDTH_360*185,SCREEN_WIDTH_360*186,SCREEN_WIDTH_360*187,SCREEN_WIDTH_360*188,SCREEN_WIDTH_360*189
+  1655 00000171 400A416441BE411842-
+  1655 0000017A 7242               
+  1656 0000017C CC4226438043DA4334-     		dw SCREEN_WIDTH_360*190,SCREEN_WIDTH_360*191,SCREEN_WIDTH_360*192,SCREEN_WIDTH_360*193,SCREEN_WIDTH_360*194,SCREEN_WIDTH_360*195,SCREEN_WIDTH_360*196,SCREEN_WIDTH_360*197,SCREEN_WIDTH_360*198,SCREEN_WIDTH_360*199
+  1656 00000185 448E44E84442459C45-
+  1656 0000018E F645               
+  1657                                  
+  1658 00000190 5046AA4604475E47B8-     		dw SCREEN_WIDTH_360*200,SCREEN_WIDTH_360*201,SCREEN_WIDTH_360*202,SCREEN_WIDTH_360*203,SCREEN_WIDTH_360*204,SCREEN_WIDTH_360*205,SCREEN_WIDTH_360*206,SCREEN_WIDTH_360*207,SCREEN_WIDTH_360*208,SCREEN_WIDTH_360*209
+  1658 00000199 4712486C48C6482049-
+  1658 000001A2 7A49               
+  1659 000001A4 D4492E4A884AE24A3C-     		dw SCREEN_WIDTH_360*210,SCREEN_WIDTH_360*211,SCREEN_WIDTH_360*212,SCREEN_WIDTH_360*213,SCREEN_WIDTH_360*214,SCREEN_WIDTH_360*215,SCREEN_WIDTH_360*216,SCREEN_WIDTH_360*217,SCREEN_WIDTH_360*218,SCREEN_WIDTH_360*219
+  1659 000001AD 4B964BF04B4A4CA44C-
+  1659 000001B6 FE4C               
+  1660 000001B8 584DB24D0C4E664EC0-     		dw SCREEN_WIDTH_360*220,SCREEN_WIDTH_360*221,SCREEN_WIDTH_360*222,SCREEN_WIDTH_360*223,SCREEN_WIDTH_360*224,SCREEN_WIDTH_360*225,SCREEN_WIDTH_360*226,SCREEN_WIDTH_360*227,SCREEN_WIDTH_360*228,SCREEN_WIDTH_360*229
+  1660 000001C1 4E1A4F744FCE4F2850-
+  1660 000001CA 8250               
+  1661 000001CC DC5036519051EA5144-     		dw SCREEN_WIDTH_360*230,SCREEN_WIDTH_360*231,SCREEN_WIDTH_360*232,SCREEN_WIDTH_360*233,SCREEN_WIDTH_360*234,SCREEN_WIDTH_360*235,SCREEN_WIDTH_360*236,SCREEN_WIDTH_360*237,SCREEN_WIDTH_360*238,SCREEN_WIDTH_360*239
+  1661 000001D5 529E52F8525253AC53-
+  1661 000001DE 0654               
+  1662                                  
+  1663 000001E0 [F702][F902][1403]-     FillJumpTable:	dw	Jump000,Jump004,Jump008,Jump012,Jump016,Jump020,Jump024,Jump028,Jump032,Jump036,Jump040,Jump044,Jump048,Jump052,Jump056,Jump060,Jump064,Jump068,Jump072,Jump076,Jump080,Jump084
+  1663 000001E6 [3603][5A03][8003]-
+  1663 000001EC [A703][CF03][F703]-
+  1663 000001F2 [2004][4D04][7B04]-
+  1663 000001F8 [A904][D804][0505]-
+  1663 000001FE [3305][6105][9005]-
+  1663 00000204 [BD05][EB05][1906]-
+  1663 0000020A [4806]             
+  1664 0000020C [7506][A306][D106]-     				dw	Jump088,Jump092,Jump096,Jump100,Jump104,Jump108,Jump112,Jump116,Jump120,Jump124,Jump128,Jump132,Jump136,Jump140,Jump144,Jump148,Jump152,Jump156,Jump160,Jump164,Jump168,Jump172
+  1664 00000212 [0007][2D07][5B07]-
+  1664 00000218 [8907][B807][E507]-
+  1664 0000021E [1308][4108][7008]-
+  1664 00000224 [9D08][CB08][F908]-
+  1664 0000022A [2809][5509][8309]-
+  1664 00000230 [B109][E009][0D0A]-
+  1664 00000236 [3B0A]             
+  1665 00000238 [690A][980A][C50A]-     				dw	Jump176,Jump180,Jump184,Jump188,Jump192,Jump196,Jump200,Jump204,Jump208,Jump212,Jump216,Jump220,Jump224,Jump228,Jump232,Jump236,Jump240,Jump244,Jump248,Jump252,Jump256,Jump260
+  1665 0000023E [F30A][210B][500B]-
+  1665 00000244 [7D0B][AB0B][D90B]-
+  1665 0000024A [080C][350C][630C]-
+  1665 00000250 [910C][C00C][ED0C]-
+  1665 00000256 [1B0D][490D][780D]-
+  1665 0000025C [A50D][D30D][010E]-
+  1665 00000262 [300E]             
+  1666 00000264 [5D0E][8B0E][B90E]-     				dw	Jump264,Jump268,Jump272,Jump276,Jump280,Jump284,Jump288,Jump292,Jump296,Jump300,Jump304,Jump308,Jump312,Jump316,Jump320,Jump324,Jump328,Jump332,Jump336,Jump340,Jump344,Jump348
+  1666 0000026A [E80E][150F][430F]-
+  1666 00000270 [710F][A00F][CD0F]-
+  1666 00000276 [FB0F][2910][5810]-
+  1666 0000027C [8510][B310][E110]-
+  1666 00000282 [1011][3D11][6B11]-
+  1666 00000288 [9911][C811][F511]-
+  1666 0000028E [2312]             
+  1667 00000290 [5112][8012][AD12]-     				dw	Jump352,Jump356,Jump360,Jump364
+  1667 00000296 [DB12]             
+  1668                                  
+  1669 00000298 555555000055000055-     Hex0	dd 000555555h,000005500h,000555555h,000555555h,000550055h,000555555h,000555555h,000555555h,000555555h,000555555h,000555555h,000555555h,000555555h,000005555h,000555555h,000555555h
+  1669 000002A1 555500555555005500-
+  1669 000002AA 550055555500555555-
+  1669 000002B3 005555550055555500-
+  1669 000002BC 555555005555550055-
+  1669 000002C5 555500555555005555-
+  1669 000002CE 000055555500555555-
+  1669 000002D7 00                 
+  1670 000002D8 550055005555000000-     Hex1	dd 000550055h,000005555h,000550000h,000550000h,000550055h,000000055h,000000055h,000550000h,000550055h,000550055h,000550055h,000550055h,000000055h,000550055h,000000055h,000000055h
+  1670 000002E1 005500000055005500-
+  1670 000002EA 550055000000550000-
+  1670 000002F3 000000550055005500-
+  1670 000002FC 550055005500550055-
+  1670 00000305 005500550000005500-
+  1670 0000030E 550055000000550000-
+  1670 00000317 00                 
+  1671 00000318 550055000055000055-     Hex2	dd 000550055h,000005500h,000555555h,000555555h,000555555h,000555555h,000555555h,000550000h,000555555h,000555555h,000555555h,000005555h,000000055h,000550055h,000555555h,000555555h
+  1671 00000321 555500555555005555-
+  1671 0000032A 550055555500555555-
+  1671 00000333 000000550055555500-
+  1671 0000033C 555555005555550055-
+  1671 00000345 550000550000005500-
+  1671 0000034E 550055555500555555-
+  1671 00000357 00                 
+  1672 00000358 550055000055000055-     Hex3	dd 000550055h,000005500h,000000055h,000550000h,000550000h,000550000h,000550055h,000550000h,000550055h,000550000h,000550055h,000550055h,000000055h,000550055h,000000055h,000000055h
+  1672 00000361 000000000055000000-
+  1672 0000036A 550000005500550055-
+  1672 00000373 000000550055005500-
+  1672 0000037C 000055005500550055-
+  1672 00000385 005500550000005500-
+  1672 0000038E 550055000000550000-
+  1672 00000397 00                 
+  1673 00000398 555555005555550055-     Hex4	dd 000555555h,000555555h,000555555h,000555555h,000550000h,000555555h,000555555h,000550000h,000555555h,000555555h,000550055h,000555555h,000555555h,000005555h,000555555h,000000055h
+  1673 000003A1 555500555555000000-
+  1673 000003AA 550055555500555555-
+  1673 000003B3 000000550055555500-
+  1673 000003BC 555555005500550055-
+  1673 000003C5 555500555555005555-
+  1673 000003CE 000055555500550000-
+  1673 000003D7 00                 
+  1674                                  
+  1675                                  align	4
+  1676 000003D8 B8003C012200EB00C2-     PointList: dw 0b8h, 13ch, 22h, 0ebh, 0c2h, 016h, 0, 0
+  1676 000003E1 00160000000000     
+  1677                                  
+  1678 000003E8 B8003C012200EB00C2-     PointList2: dw 0b8h, 13ch, 22h, 0ebh, 0c2h, 016h, 0, 0
+  1678 000003F1 00160000000000     
+  1679                                   
+  1680                                  ; dw 0a1h, 12bh, 039h, 0d4h, 0b5h, 01h
+  1681                                   
+  1682                                  ; dw	056h,0e0h 
+  1683                                  ; dw	084h,089h 
+  1684                                  ; dw	06ah,04ch 
+  1685                                  
+  1686                                  ; dw 0bah, 03ah,120h
+  1687                                  ; dw 0edh,0c0h
+  1688                                  ; dw 018h,0bah
+  1689                                  
+  1690                                  ; dw 095h, 011fh 
+  1691                                  ; dw 045h, 0c8h
+  1692                                  ; dw 0a9h, 00dh
+  1693                                   
+  1694                                  ;		dw	10,10
+  1695                                  ;		dw	190,90
+  1696                                  ;		dw	30,310
+  1697 000003F8 00000000                		dw	0,0
+  1698 000003FC 00000000                		dw	0,0
+  1699 00000400 00000000                		dw	0,0
+  1700 00000404 00000000                		dw	0,0
+  1701 00000408 00000000                		dw	0,0
+  1702                                  ;		resw	256
+  1703                                  
+  1704                                  DirList:
+  1705 0000040C 0100FFFFFFFF0100FF-      dw 1,-1,-1,1,-1,1
+  1705 00000415 FF0100             
+  1706                                   
+  1707                                  ; dw 1,1,-1,1,1,-1
+  1708                                   
+  1709                                  ; dw 1,-1
+  1710                                  ; dw -1,1
+  1711                                  ; dw -1,1
+  1712                                   
+  1713 00000418 01000100                 dw	1,1
+  1714 0000041C FFFF0100                 dw	-1,1
+  1715 00000420 0100FFFF                 dw	1,-1
+  1716 00000424 0100FFFF0100FFFF01-      dw 	+1,-1,+1,-1,+1,-1,+1,-1,+1,-1,+1,-1
+  1716 0000042D 00FFFF0100FFFF0100-
+  1716 00000436 FFFF0100FFFF       
+  1717                                   
+  1718 0000043C 0E0C0800<rep 5Ah>       edgeleft:  times 360/4 db 15-1, 15-(2+1), 15-(4+2+1), 15-(8+4+2+1)
+  1719 000005A4 0103070F<rep 5Ah>       edgeright: times 360/4 db 1, (2+1), (4+2+1), (8+4+2+1) ; , (4+2+1), (2+1), 1
+  1720                                  		
+  1721                                  section .bss 	; put uninitialized data here
+  1722                                  align	4
+  1723 00000000 <res C80h>              EdgeTable	resd	800
+  1724                                  
+  1725 00000C80 ????                    ScreenBuffer	resw	1
+  1726 00000C82 ????                    ScreenBufferSeg	resw	1
+  1727 00000C84 ??                      Colour		resb	1
+  1728                                  
+  1729                                  ; table of jmps to code based on number of dwords to draw? 360/4 jumps?
+  1730                                  
+  1731                                  ; 0 in same 4 bits
+  1732                                  
+  1733                                  ; hstart / 4
+  1734                                  ; hend / 4
+  1735                                  ; hdiff = hend - hstart
+  1736                                  ; lookup jumptable 
+  1737                                  ; jump to code to do
+  1738                                  
+  1739                                  ; %macro  prologue 1 
+  1740                                  ;        push    ebp 
+  1741                                  ;        mov     ebp,esp 
+  1742                                  ;        sub     esp,%1 
+  1743                                  ; %endmacro
+  1744                                  ; This defines a C-like function prologue as a macro: so you would invoke the macro with a call such as:
+  1745                                  ; myfunc:   prologue 12
+  1746                                  
+  1747                                  ; repeat
+  1748                                  ; buffer:        times 90 db 0
