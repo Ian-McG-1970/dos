@@ -677,7 +677,7 @@ CopyClearBackBufferV8:	cld
 ;	mov	bx,si
 ;	mov	dx,si
 
-						mov		ecx,2000
+						mov		ecx,2001
 .loop1:						repe	cmpsd
 							jcxz	.exit1
 								mov		eax,[ds:si-4] ;-4
@@ -689,7 +689,7 @@ CopyClearBackBufferV8:	cld
 
 						mov		si,8192
 						mov		di,si
-						mov		cx,2000
+						mov		cx,2001
 .loop2:						repe	cmpsd
 							jcxz	.exit2
 								mov		eax,[ds:si-4] ;-4
