@@ -290,7 +290,7 @@ CopyClearBackBufferV2:	cld
 						
 ;	mov	bx,si
 
-						mov		ecx,16000
+						mov		ecx,16001
 .loop1:						repe	cmpsd
 							jcxz	.exit1
 								mov		eax,[ds:si-4] ;-4
